@@ -175,26 +175,67 @@ def email_card(conn: sqlite3.Connection, row: sqlite3.Row, key_prefix: str, inte
 def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, Any]) -> None:
     with st.expander("Gestão Click: preparar orçamento em aberto"):
         gc = GestaoClickClient()
+        client_key = f"quote_cliente_{row['id']}"
+        clients_key = f"quote_clients_{row['id']}"
+        situations_key = f"quote_situations_{row['id']}"
         cnpj_detectado = first_value(detected.get("cnpj"))
         manual_cnpj = st.text_input("CNPJ do cliente", value=cnpj_detectado, key=f"quote_cnpj_{row['id']}")
-        cliente_id = st.text_input("Cliente ID no Gestão Click", key=f"quote_cliente_{row['id']}")
-        codigo = st.text_input("Número/código do orçamento", key=f"quote_codigo_{row['id']}")
-        situacao_id = st.text_input(
-            "Situação ID do orçamento em aberto",
-            value=env("GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID", "") or "",
-            key=f"quote_situacao_{row['id']}",
-        )
 
         if st.button("Buscar cliente por CNPJ", key=f"quote_find_client_{row['id']}"):
             try:
                 clients = gc.search_clients(cnpj=manual_cnpj)
-                st.session_state[f"quote_clients_{row['id']}"] = clients
+                st.session_state[clients_key] = clients
+                if clients:
+                    first_client = clients[0]
+                    st.session_state[client_key] = str(first_client.get("id") or first_client.get("cliente_id") or "")
+                    st.success(f"Cliente localizado: {first_client.get('nome') or first_client.get('razao_social') or first_client.get('nome_fantasia') or 'sem nome'}")
+                    st.rerun()
+                else:
+                    st.warning("Nenhum cliente encontrado para este CNPJ.")
             except Exception as exc:
                 st.error(f"Erro ao buscar cliente: {exc}")
-        clients = st.session_state.get(f"quote_clients_{row['id']}", [])
+
+        cliente_id = st.text_input("Cliente ID no Gestão Click", key=client_key)
+        clients = st.session_state.get(clients_key, [])
         if clients:
-            st.dataframe(clients, use_container_width=True)
-            st.caption("Copie o ID do cliente desejado para o campo acima.")
+            compact_clients = [
+                {
+                    "id": c.get("id") or c.get("cliente_id"),
+                    "nome": c.get("nome") or c.get("razao_social") or c.get("nome_fantasia"),
+                    "cpf_cnpj": c.get("cpf_cnpj") or c.get("cnpj") or c.get("cpf"),
+                    "email": c.get("email"),
+                }
+                for c in clients
+            ]
+            st.dataframe(compact_clients, use_container_width=True, hide_index=True)
+
+        codigo = st.text_input("Número/código do orçamento", key=f"quote_codigo_{row['id']}")
+
+        if st.button("Carregar situações de orçamento", key=f"quote_load_situations_{row['id']}"):
+            try:
+                st.session_state[situations_key] = gc.list_quote_situations()
+            except Exception as exc:
+                st.error(f"Erro ao carregar situações: {exc}")
+
+        situations = st.session_state.get(situations_key, [])
+        situacao_id = env("GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID", "") or ""
+        if situations:
+            options = []
+            for s in situations:
+                sid = str(s.get("id") or s.get("situacao_id") or "")
+                name = s.get("nome") or s.get("descricao") or s.get("nome_situacao") or "sem nome"
+                if sid:
+                    options.append((sid, f"{sid} - {name}"))
+            labels = [label for _, label in options]
+            current_index = next((i for i, (sid, _) in enumerate(options) if sid == str(situacao_id)), 0)
+            selected_label = st.selectbox("Escolher situação do orçamento", labels, index=current_index, key=f"quote_situation_select_{row['id']}")
+            situacao_id = options[labels.index(selected_label)][0]
+        else:
+            situacao_id = st.text_input(
+                "Situação ID do orçamento em aberto",
+                value=situacao_id,
+                key=f"quote_situacao_manual_{row['id']}",
+            )
 
         guessed_items = detected.get("itens_solicitados") or extract_requested_items(txt(row["body"]))
         items_text = "\n".join(f"{item.get('quantidade', '1')};{item.get('produto', '')};" for item in guessed_items)
@@ -212,7 +253,17 @@ def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, 
             produtos=produtos,
             observacoes=f"Origem: e-mail #{row['id']} - {txt(row['subject'])}\n\n{remove_quoted_replies(txt(row['body']))[:1500]}",
         )
-        st.json(payload)
+        st.markdown("**Resumo que será enviado ao Gestão Click**")
+        st.write(
+            {
+                "cliente_id": payload.get("cliente_id"),
+                "codigo": payload.get("codigo"),
+                "situacao_id": payload.get("situacao_id"),
+                "produtos": len(payload.get("produtos") or []),
+            }
+        )
+        with st.expander("Prévia técnica do payload"):
+            st.json(payload)
         validation_errors = validate_quote_payload(payload)
         if validation_errors:
             st.error("Antes de criar no Gestão Click, corrija:\n\n- " + "\n- ".join(validation_errors))

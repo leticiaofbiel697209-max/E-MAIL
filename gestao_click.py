@@ -76,6 +76,10 @@ class GestaoClickClient:
         result = self.request("GET", "/produtos", params={"nome": nome, "limit": 20})
         return result.get("data") or []
 
+    def list_quote_situations(self) -> list[dict[str, Any]]:
+        result = self.request("GET", "/situacoes_orcamentos")
+        return result.get("data") or []
+
     def create_quote(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/orcamentos", payload=payload)
 
@@ -116,14 +120,14 @@ def build_quote_payload(
             "desconto_porcentagem": "0.00",
         }
         if product_id:
-            product_payload["id"] = product_id
+            product_payload["id"] = int(product_id) if product_id.isdigit() else product_id
         payload_products.append({"produto": product_payload})
 
     return {
         "tipo": "produto",
-        "codigo": codigo,
-        "cliente_id": cliente_id,
-        "situacao_id": situacao_id,
+        "codigo": int(codigo) if str(codigo).isdigit() else codigo,
+        "cliente_id": int(cliente_id) if str(cliente_id).isdigit() else cliente_id,
+        "situacao_id": int(situacao_id) if str(situacao_id).isdigit() else situacao_id,
         "data": date.today().isoformat(),
         "observacoes": observacoes,
         "observacoes_interna": "Criado pela Central de E-mails Novaprint após aprovação manual.",
