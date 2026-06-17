@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import imaplib
 import smtplib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
@@ -40,9 +40,11 @@ class EmailClient:
         mail.login(self.user, self.password)
         return mail
 
-    def fetch_recent_and_unread(self, days: int = 7, mailbox: str = "INBOX", limit: int = 80) -> list[dict[str, Any]]:
+    def fetch_recent_and_unread(self, days: int = 7, mailbox: str = "INBOX", limit: int = 80, include_old_unread: bool = False) -> list[dict[str, Any]]:
         since = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
-        criteria_list = ["UNSEEN", f'SINCE "{since}"']
+        criteria_list = [f'SINCE "{since}"']
+        if include_old_unread:
+            criteria_list.append("UNSEEN")
 
         with self.connect() as mail:
             mail.select(mailbox)
@@ -72,7 +74,9 @@ class EmailClient:
                     continue
                 msg = message_from_bytes(raw)
                 is_unread = b"\\Seen" not in flags_raw
-                emails.append(parse_email_message(msg, uid.decode(errors="ignore"), is_unread))
+                parsed = parse_email_message(msg, uid.decode(errors="ignore"), is_unread)
+                if include_old_unread or _is_recent(parsed.get("date"), days):
+                    emails.append(parsed)
             return emails
 
 
@@ -139,6 +143,19 @@ def parse_email_message(msg, imap_uid: str, is_unread: bool) -> dict[str, Any]:
         "attachments": attachments,
         "is_unread": is_unread,
     }
+
+
+def _is_recent(date_value: str | None, days: int) -> bool:
+    if not date_value:
+        return True
+    try:
+        dt = datetime.fromisoformat(date_value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        cutoff = datetime.now(tz=dt.tzinfo) - timedelta(days=days)
+        return dt >= cutoff
+    except Exception:
+        return True
 
 
 def send_email_smtp(to_email: str, subject: str, body: str, reply_to_message_id: str | None = None) -> None:

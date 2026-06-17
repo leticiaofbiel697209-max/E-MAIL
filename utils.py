@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import unicodedata
 from datetime import datetime
 from email.header import decode_header
 from typing import Any, Optional
@@ -144,3 +145,81 @@ def find_entities(text: str) -> dict[str, Any]:
 
 def bool_to_status(is_unread: bool) -> str:
     return "não lido" if is_unread else "lido"
+
+
+def repair_mojibake(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    if not any(marker in value for marker in ("Ã", "Â", "ð", "�")):
+        return value
+    try:
+        fixed = value.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+        return fixed or value
+    except Exception:
+        return value
+
+
+def remove_quoted_replies(text: str) -> str:
+    text = repair_mojibake(text or "")
+    cut_patterns = [
+        r"\nEm \d{1,2}/\d{1,2}/\d{4}.*?escreveu:",
+        r"\nOn .* wrote:",
+        r"\nDe:\s.*\nEnviado:",
+        r"\n_{5,}\n",
+        r"\n-{5,}\n",
+    ]
+    first_cut = len(text)
+    for pattern in cut_patterns:
+        match = re.search(pattern, text, flags=re.I | re.S)
+        if match:
+            first_cut = min(first_cut, match.start())
+    cleaned_lines = []
+    for line in text[:first_cut].splitlines():
+        if line.strip().startswith(">"):
+            continue
+        cleaned_lines.append(line)
+    return clean_text("\n".join(cleaned_lines))
+
+
+def normalize_for_search(text: str) -> str:
+    text = repair_mojibake(text or "").replace("?", "c")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.lower()
+
+
+def extract_requested_items(text: str) -> list[dict[str, str]]:
+    text = remove_quoted_replies(text)
+    text = re.sub(r"\bCNPJ\b.*", "", text, flags=re.I)
+    text = re.sub(r"\b(?:telefone|tel\.?|e-mail|email)\b.*", "", text, flags=re.I)
+    items: list[dict[str, str]] = []
+    patterns = [
+        r"(?P<qtd>\d+(?:[,.]\d+)?)\s*(?:un|und|unid|unidade|unidades|x)?\s+(?:de\s+)?(?P<produto>[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9\s\-_/.,]{3,80})",
+        r"(?P<produto>[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9\s\-_/.,]{3,80})\s*[-:]\s*(?P<qtd>\d+(?:[,.]\d+)?)\s*(?:un|und|unid|unidade|unidades)?",
+    ]
+    stop_words = ("cnpj", "telefone", "email", "e-mail", "orçamento", "orcamento", "pedido", "valor")
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        pieces = re.split(r"\s+(?:e|,|\+)\s+(?=\d+(?:[,.]\d+)?\s)", raw_line, flags=re.I)
+        lines.extend(pieces)
+    for line in lines:
+        line = line.strip(" -•\t")
+        if len(line) < 5:
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, line, flags=re.I)
+            if not match:
+                continue
+            produto = clean_text(match.group("produto")).strip(" .,-")
+            qtd = match.group("qtd").replace(",", ".")
+            if produto and not any(word in normalize_for_search(produto) for word in stop_words):
+                items.append({"produto": produto[:100], "quantidade": qtd})
+            break
+    unique = []
+    seen = set()
+    for item in items:
+        key = (normalize_for_search(item["produto"]), item["quantidade"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique[:12]

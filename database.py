@@ -217,6 +217,12 @@ def list_emails(filters: dict[str, Any] | None = None, conn: sqlite3.Connection 
     if filters.get("status") and filters["status"] != "Todos":
         clauses.append("status=?")
         params.append(filters["status"])
+    if filters.get("date_start"):
+        clauses.append("substr(date, 1, 10) >= ?")
+        params.append(str(filters["date_start"]))
+    if filters.get("date_end"):
+        clauses.append("substr(date, 1, 10) <= ?")
+        params.append(str(filters["date_end"]))
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     rows = conn.execute(f"SELECT * FROM emails{where} ORDER BY urgency DESC, date DESC, id DESC", params).fetchall()
     if close:

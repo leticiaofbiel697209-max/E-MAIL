@@ -55,6 +55,10 @@ EMAIL_SMTP_PORT=587
 EMAIL_USER=seuemail@seudominio.com
 EMAIL_PASSWORD=sua_senha_ou_senha_de_app
 OPENAI_API_KEY=
+GESTAOCLICK_BASE_URL=https://api.gestaoclick.com/api
+GESTAOCLICK_ACCESS_TOKEN=
+GESTAOCLICK_SECRET_ACCESS_TOKEN=
+GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID=
 ```
 
 Nunca coloque senha dentro do código. A senha deve ficar somente no `.env`.
@@ -131,6 +135,32 @@ No Outlook/Microsoft 365, pode ser necessário liberar SMTP AUTH no painel admin
 - Deixe `EMAIL_SMTP_HOST` vazio para impedir envio.
 - Não marque a confirmação de envio.
 - Sem `OPENAI_API_KEY`, a classificação funciona por regras locais.
+
+## Gestão Click
+
+Preencha no `.env`:
+
+```env
+GESTAOCLICK_BASE_URL=https://api.gestaoclick.com/api
+GESTAOCLICK_ACCESS_TOKEN=seu_access_token
+GESTAOCLICK_SECRET_ACCESS_TOKEN=seu_secret_access_token
+GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID=id_da_situacao_em_aberto
+```
+
+Na aba **Pedidos de Orçamento**, o sistema:
+
+- detecta CNPJ quando possível;
+- deixa você informar CNPJ, cliente ID e número do orçamento manualmente;
+- tenta detectar produtos e quantidades no e-mail;
+- monta uma prévia do payload do orçamento;
+- só cria no Gestão Click se você marcar a aprovação manual.
+
+Na aba **Financeiro**, o sistema:
+
+- busca cliente pelo CNPJ;
+- consulta recebimentos e notas fiscais pelo cliente ID;
+- permite gerar rascunho financeiro;
+- não envia nota, boleto nem resposta sem aprovação manual.
 
 ## Banco local
 

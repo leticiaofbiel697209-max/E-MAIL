@@ -9,18 +9,48 @@ except Exception:
     OpenAI = None
 
 from database import log_event
-from utils import env, now_iso
+from utils import env, extract_requested_items, find_entities, normalize_for_search, now_iso, remove_quoted_replies
 
 
 def generate_response(email_row: sqlite3.Row | dict[str, Any]) -> str:
     subject = email_row["subject"]
-    body = email_row["body"]
+    body = remove_quoted_replies(email_row["body"])
     sender = email_row["sender_name"] or email_row["sender_email"]
     category = email_row["category"]
+    category_key = normalize_for_search(category)
     action = email_row["recommended_action"] or "Responder de forma profissional."
+    detected = find_entities(f"{subject}\n{body}")
+    items = extract_requested_items(body)
 
     api_key = env("OPENAI_API_KEY")
     if not api_key or OpenAI is None:
+        if category_key == "pedido de orcamento":
+            itens = "\n".join(f"- {item['quantidade']} x {item['produto']}" for item in items) or "- itens e quantidades ainda precisam ser confirmados"
+            return f"""Olá, {sender}.
+
+Recebemos sua solicitação de orçamento.
+
+Identificamos inicialmente:
+{itens}
+
+Para montarmos o orçamento corretamente, por favor confirme os itens, quantidades, medidas/acabamentos desejados e os dados fiscais para cadastro.
+
+Atenciosamente,
+Equipe Novaprint"""
+        if category in ("Financeiro", "Pedido de boleto", "Pedido de nota fiscal", "Comprovante enviado") or category_key in {
+            "financeiro",
+            "pedido de boleto",
+            "pedido de nota fiscal",
+            "comprovante enviado",
+        }:
+            return f"""Olá, {sender}.
+
+Recebemos sua solicitação financeira referente a: {subject}.
+
+Vamos conferir os dados no sistema antes de enviar boleto, nota fiscal ou confirmação de baixa. Caso tenha CNPJ, número do pedido/orçamento ou comprovante, por favor mantenha essas informações nesta conversa para agilizar a conferência.
+
+Atenciosamente,
+Equipe Novaprint"""
         return f"""Olá, {sender}.
 
 Recebemos sua mensagem sobre: {subject}.
@@ -40,6 +70,8 @@ Tom cordial, claro e comercial.
 Cliente/remetente: {sender}
 Categoria: {category}
 Ação recomendada: {action}
+Dados detectados: {detected}
+Itens detectados: {items}
 Assunto original: {subject}
 Corpo original:
 {body[:6000]}

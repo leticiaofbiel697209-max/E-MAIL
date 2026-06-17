@@ -8,37 +8,49 @@ try:
 except Exception:
     OpenAI = None
 
-from utils import CATEGORIES, RESPONSIBLES, env, find_entities
+from utils import CATEGORIES, RESPONSIBLES, env, extract_requested_items, find_entities, normalize_for_search, remove_quoted_replies
 
 
 def _fallback_classification(subject: str, body: str) -> dict[str, Any]:
-    text = f"{subject}\n{body}".lower()
+    main_body = remove_quoted_replies(body)
+    text = normalize_for_search(f"{subject}\n{main_body}")
     category = "Outros"
     responsible = "suporte"
     urgency = 2
     action = "Ler e responder conforme o conteúdo."
     rules = [
-        (("orçamento", "orcamento", "or?amento", "cotação", "cotacao", "cota?ao", "preço", "preco", "pre?o"), "Pedido de orçamento", "vendas", 3, "Responder solicitando ou confirmando itens e dados para orçamento."),
+        (("orcamento", "cotacao", "preco", "valor", "quanto fica"), "Pedido de orçamento", "vendas", 3, "Responder solicitando ou confirmando itens, quantidades, medidas, prazo e dados fiscais para orçamento."),
         (("boleto", "segunda via", "2ª via", "vencimento"), "Pedido de boleto", "financeiro", 3, "Verificar financeiro e enviar o boleto correto."),
         (("nota fiscal", "nf", "danfe", "nfe", "xml"), "Pedido de nota fiscal", "financeiro", 3, "Localizar a nota fiscal e responder com dados ou anexo."),
         (("comprovante", "pagamento realizado", "paguei", "pix"), "Comprovante enviado", "financeiro", 3, "Conferir comprovante e dar baixa quando confirmado."),
         (("entrega", "rastreamento", "chegou", "transportadora", "atraso"), "Cobrança de entrega", "entrega", 4, "Consultar status da entrega e retornar com prazo."),
         (("reclama", "problema", "defeito", "não funciona", "nao funciona", "n?o funciona", "insatisfeito"), "Reclamação", "suporte", 4, "Responder com acolhimento e abrir tratativa."),
         (("urgente", "hoje", "imediato", "prioridade"), "Urgente", "diretoria", 5, "Tratar imediatamente ou encaminhar ao responsável."),
-        (("cobrança", "cobranca", "pagamento", "financeiro", "débito", "debito"), "Financeiro", "financeiro", 3, "Encaminhar ou validar com o financeiro."),
+        (("cobranca", "pagamento", "financeiro", "debito", "em aberto", "nota fiscal", "boleto"), "Financeiro", "financeiro", 3, "Localizar cliente no Gestão Click e validar boletos/notas antes de responder."),
         (("pós-venda", "pos venda", "feedback", "troca"), "Pós-venda", "suporte", 2, "Fazer atendimento de pós-venda."),
+        (("relatorio", "prospeccao", "prospect", "planilha", "segue a planilha"), "Outros", "suporte", 1, "Arquivar ou responder apenas se houver solicitação clara."),
     ]
     for keys, cat, resp, urg, act in rules:
         if any(k in text for k in keys):
             category, responsible, urgency, action = cat, resp, urg, act
             break
+    if category != "Urgente" and any(k in text for k in ("urgente", "imediato", "prioridade", "atrasado", "parado")):
+        urgency = max(urgency, 4)
+    if any(k in text for k in ("relatorio", "prospeccao", "segue a planilha")):
+        urgency = min(urgency, 2)
+        if category == "Urgente":
+            category = "Outros"
+            responsible = "suporte"
     return {
         "category": category,
-        "summary": (body or subject or "E-mail sem conteúdo")[:220],
+        "summary": (main_body or subject or "E-mail sem conteúdo")[:260],
         "urgency": urgency,
         "recommended_action": action,
         "responsible": responsible,
-        "detected": find_entities(f"{subject}\n{body}"),
+        "detected": {
+            **find_entities(f"{subject}\n{main_body}"),
+            "itens_solicitados": extract_requested_items(main_body),
+        },
     }
 
 
@@ -59,8 +71,8 @@ urgency deve ser inteiro de 1 a 5.
 detected deve conter arrays: cnpj, telefone, numero_pedido, numero_orcamento, valor.
 
 Assunto: {subject}
-Corpo:
-{body[:6000]}
+Corpo principal, sem histórico citado:
+{remove_quoted_replies(body)[:6000]}
 """
     try:
         resp = client.chat.completions.create(
