@@ -80,6 +80,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "valor": txt(item.get("valor_total_nf") or item.get("valor_produtos")),
                     "emissao": txt(item.get("data_emissao")),
                     "situacao": txt(item.get("situacao_nf")),
+                    "link": txt(item.get("url") or item.get("link") or item.get("link_pdf") or item.get("danfe")),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -330,6 +331,7 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         clients_key = f"fin_clients_{row['id']}"
         cnpj_detectado = first_value(detected.get("cnpj"))
         manual_cnpj = st.text_input("CNPJ do cliente", value=cnpj_detectado, key=f"fin_cnpj_{row['id']}")
+        numero_nf = st.text_input("Número da nota fiscal, se souber", key=f"fin_numero_nf_{row['id']}")
         c1, c2, c3 = st.columns(3)
         if c1.button("Buscar cliente", key=f"fin_find_client_{row['id']}"):
             try:
@@ -353,7 +355,10 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 st.error(f"Erro ao consultar financeiro: {exc}")
         if c3.button("Consultar notas fiscais", key=f"fin_invoices_{row['id']}"):
             try:
-                st.session_state[f"fin_invoices_data_{row['id']}"] = gc.list_product_invoices(cliente_id)
+                notas = gc.list_product_invoices(cliente_id, cnpj=manual_cnpj, numero_nf=numero_nf)
+                st.session_state[f"fin_invoices_data_{row['id']}"] = notas
+                if not notas:
+                    st.warning("Nenhuma nota correspondente a este Cliente ID/CNPJ foi encontrada.")
             except Exception as exc:
                 st.error(f"Erro ao consultar notas: {exc}")
 
@@ -432,6 +437,11 @@ def responses_tab() -> None:
             st.caption(f"Para: {txt(r['to_email'])} | Status: {txt(r['status'])} | Categoria: {txt(r['category'])}")
             subject = st.text_input("Assunto", txt(r["subject"]), key=f"resp_subject_{r['id']}")
             body = st.text_area("Resposta", txt(r["body"]), height=260, key=f"resp_body_{r['id']}")
+            uploaded_files = st.file_uploader(
+                "Anexar nota, boleto, XML ou outro arquivo",
+                accept_multiple_files=True,
+                key=f"resp_attachments_{r['id']}",
+            )
             c1, c2 = st.columns(2)
             if c1.button("Salvar edição", key=f"resp_save_{r['id']}"):
                 update_response(conn, r["id"], subject, body)
@@ -442,8 +452,23 @@ def responses_tab() -> None:
                 try:
                     update_response(conn, r["id"], subject, body)
                     original = conn.execute("SELECT message_id FROM emails WHERE id=?", (r["email_id"],)).fetchone()
-                    send_email_smtp(txt(r["to_email"]), subject, body, original["message_id"] if original else None)
+                    attachments = [
+                        {
+                            "filename": file.name,
+                            "content": file.getvalue(),
+                            "mime_type": file.type,
+                        }
+                        for file in uploaded_files
+                    ]
+                    send_email_smtp(
+                        txt(r["to_email"]),
+                        subject,
+                        body,
+                        original["message_id"] if original else None,
+                        attachments=attachments,
+                    )
                     mark_response_sent(conn, r["id"])
+                    log_event("INFO", "envio_email", f"Resposta {r['id']} enviada com {len(attachments)} anexo(s).", conn)
                     st.success("E-mail enviado com confirmação manual.")
                 except Exception as exc:
                     log_event("ERROR", "envio_email", str(exc), conn)
@@ -479,6 +504,7 @@ def config_tab() -> None:
         {"Variável": "EMAIL_IMAP_PORT", "Status/valor": env("EMAIL_IMAP_PORT", "993")},
         {"Variável": "EMAIL_SMTP_HOST", "Status/valor": env("EMAIL_SMTP_HOST", "não configurado")},
         {"Variável": "EMAIL_SMTP_PORT", "Status/valor": env("EMAIL_SMTP_PORT", "587")},
+        {"Variável": "EMAIL_SMTP_USE_SSL", "Status/valor": env("EMAIL_SMTP_USE_SSL", "false")},
         {"Variável": "EMAIL_USER", "Status/valor": env("EMAIL_USER", "não configurado")},
         {"Variável": "EMAIL_PASSWORD", "Status/valor": "configurado" if env("EMAIL_PASSWORD") else "não configurado"},
         {"Variável": "OPENAI_API_KEY", "Status/valor": "configurado" if env("OPENAI_API_KEY") else "não configurado - usando fallback por regras"},
@@ -487,6 +513,25 @@ def config_tab() -> None:
         {"Variável": "GESTAOCLICK_DEFAULT_LOJA_ID", "Status/valor": env("GESTAOCLICK_DEFAULT_LOJA_ID", "não configurado")},
     ]
     st.dataframe(config, use_container_width=True, hide_index=True)
+    st.divider()
+    st.markdown("### Teste de envio SMTP")
+    test_to = st.text_input("Enviar teste para", value=env("EMAIL_USER", ""), key="smtp_test_to")
+    test_confirm = st.checkbox("Confirmo enviar um e-mail de teste", key="smtp_test_confirm")
+    if st.button("Enviar teste SMTP", disabled=not test_confirm):
+        conn = get_conn()
+        try:
+            send_email_smtp(
+                test_to,
+                "Teste de envio - Central de E-mails Novaprint",
+                "Este é um teste de envio SMTP feito pela Central de E-mails Novaprint.",
+            )
+            log_event("INFO", "teste_smtp", f"Teste enviado para {test_to}", conn)
+            st.success("Teste enviado. Confira a caixa de entrada e o spam/lixo eletrônico.")
+        except Exception as exc:
+            log_event("ERROR", "teste_smtp", str(exc), conn)
+            st.error(f"Erro no teste SMTP: {exc}")
+        finally:
+            conn.close()
     st.divider()
     st.markdown("### Integrações")
     st.write("Gestão Click: clientes, produtos, orçamentos, recebimentos e notas fiscais. Toda ação de criação/envio exige aprovação manual.")

@@ -99,15 +99,25 @@ class GestaoClickClient:
         result = self.request("GET", "/recebimentos", params=params)
         return result.get("data") or []
 
-    def list_product_invoices(self, cliente_id: str | int, limit: int = 20) -> list[dict[str, Any]]:
+    def list_product_invoices(
+        self,
+        cliente_id: str | int,
+        cnpj: str = "",
+        numero_nf: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
         attempts = [
             {"destinatario_id": cliente_id, "limit": limit},
             {"destinatario_id_cliente": cliente_id, "limit": limit},
             {"cliente_id": cliente_id, "limit": limit},
         ]
+        if cnpj:
+            attempts.append({"cpf_cnpj": only_digits(cnpj), "limit": limit})
+        if numero_nf:
+            attempts.append({"numero_nf": numero_nf, "limit": limit})
         for params in attempts:
             result = self.request("GET", "/notas_fiscais_produtos", params=self._store_params(params))
-            data = result.get("data") or []
+            data = filter_invoices_for_client(result.get("data") or [], cliente_id, cnpj, numero_nf)
             if data:
                 return data
         return []
@@ -115,6 +125,55 @@ class GestaoClickClient:
 
 def only_digits(value: str) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def filter_invoices_for_client(
+    invoices: list[dict[str, Any]],
+    cliente_id: str | int,
+    cnpj: str = "",
+    numero_nf: str = "",
+) -> list[dict[str, Any]]:
+    wanted_id = str(cliente_id or "").strip()
+    wanted_doc = only_digits(cnpj)
+    wanted_nf = str(numero_nf or "").strip()
+    filtered = []
+    for item in invoices:
+        if not isinstance(item, dict):
+            continue
+        possible_ids = [
+            item.get("cliente_id"),
+            item.get("id_cliente"),
+            item.get("destinatario_id"),
+            item.get("destinatario_id_cliente"),
+            item.get("id_destinatario"),
+        ]
+        cliente = item.get("cliente") if isinstance(item.get("cliente"), dict) else {}
+        destinatario = item.get("destinatario") if isinstance(item.get("destinatario"), dict) else {}
+        possible_ids.extend([cliente.get("id"), destinatario.get("id"), cliente.get("cliente_id")])
+        possible_docs = [
+            item.get("cpf_cnpj"),
+            item.get("cnpj"),
+            item.get("documento"),
+            item.get("destinatario_cpf_cnpj"),
+            item.get("destinatario_documento"),
+            cliente.get("cpf_cnpj"),
+            cliente.get("cnpj"),
+            destinatario.get("cpf_cnpj"),
+            destinatario.get("cnpj"),
+            destinatario.get("documento"),
+        ]
+        possible_numbers = [
+            item.get("numero_nf"),
+            item.get("numero_nfe"),
+            item.get("numero"),
+            item.get("codigo"),
+        ]
+        id_match = wanted_id and any(str(value or "").strip() == wanted_id for value in possible_ids)
+        doc_match = wanted_doc and any(only_digits(str(value or "")) == wanted_doc for value in possible_docs)
+        nf_match = wanted_nf and any(str(value or "").strip() == wanted_nf for value in possible_numbers)
+        if nf_match or doc_match or id_match:
+            filtered.append(item)
+    return filtered
 
 
 def build_quote_payload(

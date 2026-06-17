@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import imaplib
+import mimetypes
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
@@ -21,14 +22,15 @@ def _imap_config() -> tuple[str, int, str, str]:
     return host, port, user, password
 
 
-def _smtp_config() -> tuple[str, int, str, str]:
+def _smtp_config() -> tuple[str, int, str, str, bool]:
     host = env("EMAIL_SMTP_HOST")
     port = int(env("EMAIL_SMTP_PORT", "587") or 587)
     user = env("EMAIL_USER")
     password = env("EMAIL_PASSWORD")
     if not all([host, user, password]):
         raise RuntimeError("Configure EMAIL_SMTP_HOST, EMAIL_USER e EMAIL_PASSWORD no arquivo .env")
-    return host, port, user, password
+    use_ssl = (env("EMAIL_SMTP_USE_SSL", "") or "").strip().lower() in ("1", "true", "sim", "yes")
+    return host, port, user, password, use_ssl or port == 465
 
 
 class EmailClient:
@@ -158,8 +160,14 @@ def _is_recent(date_value: str | None, days: int) -> bool:
         return True
 
 
-def send_email_smtp(to_email: str, subject: str, body: str, reply_to_message_id: str | None = None) -> None:
-    host, port, user, password = _smtp_config()
+def send_email_smtp(
+    to_email: str,
+    subject: str,
+    body: str,
+    reply_to_message_id: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> None:
+    host, port, user, password, use_ssl = _smtp_config()
     msg = EmailMessage()
     msg["From"] = user
     msg["To"] = to_email
@@ -168,8 +176,20 @@ def send_email_smtp(to_email: str, subject: str, body: str, reply_to_message_id:
         msg["In-Reply-To"] = reply_to_message_id
         msg["References"] = reply_to_message_id
     msg.set_content(body)
+    for attachment in attachments or []:
+        filename = str(attachment.get("filename") or "anexo")
+        content = attachment.get("content") or b""
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        mime_type = attachment.get("mime_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        maintype, subtype = mime_type.split("/", 1)
+        msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
 
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
-        smtp.starttls()
+    smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+    with smtp_cls(host, port, timeout=30) as smtp:
+        if not use_ssl:
+            smtp.starttls()
         smtp.login(user, password)
-        smtp.send_message(msg)
+        refused = smtp.send_message(msg)
+        if refused:
+            raise RuntimeError(f"SMTP recusou destinatário(s): {refused}")

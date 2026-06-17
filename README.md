@@ -52,6 +52,7 @@ EMAIL_IMAP_HOST=imap.seudominio.com
 EMAIL_IMAP_PORT=993
 EMAIL_SMTP_HOST=smtp.seudominio.com
 EMAIL_SMTP_PORT=587
+EMAIL_SMTP_USE_SSL=false
 EMAIL_USER=seuemail@seudominio.com
 EMAIL_PASSWORD=sua_senha_ou_senha_de_app
 OPENAI_API_KEY=
@@ -74,6 +75,7 @@ EMAIL_IMAP_HOST = "mail.seudominio.com.br"
 EMAIL_IMAP_PORT = "993"
 EMAIL_SMTP_HOST = "mail.seudominio.com.br"
 EMAIL_SMTP_PORT = "587"
+EMAIL_SMTP_USE_SSL = "false"
 EMAIL_USER = "seuemail@seudominio.com.br"
 EMAIL_PASSWORD = "sua_senha_do_email"
 OPENAI_API_KEY = ""
@@ -87,6 +89,10 @@ GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID = "id_da_situacao_em_aberto"
 Depois clique em **Save** e reinicie o app. O código aceita tanto `.env` local quanto os Secrets do Streamlit Cloud.
 
 Use sempre o `GESTAOCLICK_DEFAULT_LOJA_ID` da **Novaprint**. Sem ele, o Gestão Click pode retornar dados de outra loja da conta, como Techtoner.
+
+Para SMTP na porta `587`, use `EMAIL_SMTP_USE_SSL = "false"` porque o app usa STARTTLS. Para porta `465`, use `EMAIL_SMTP_USE_SSL = "true"`.
+
+Na aba **Configurações**, use **Enviar teste SMTP** antes de enviar para cliente. Se o teste não chegar, confira spam/lixo eletrônico, senha de aplicativo e liberação de SMTP no provedor.
 
 ## Como rodar
 
@@ -142,6 +148,7 @@ No Outlook/Microsoft 365, pode ser necessário liberar SMTP AUTH no painel admin
 - Deixe `EMAIL_SMTP_HOST` vazio para impedir envio.
 - Não marque a confirmação de envio.
 - Sem `OPENAI_API_KEY`, a classificação funciona por regras locais.
+- Para nota fiscal ou boleto, gere o rascunho, vá em **Respostas Geradas**, anexe o PDF/XML/boleto e só então confirme o envio.
 
 ## Gestão Click
 
