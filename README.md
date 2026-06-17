@@ -59,6 +59,24 @@ OPENAI_API_KEY=
 
 Nunca coloque senha dentro do código. A senha deve ficar somente no `.env`.
 
+## Configuração no Streamlit Cloud
+
+Se o app estiver online no Streamlit Cloud, não envie `.env` para o GitHub.
+
+No painel do app, vá em **Settings > Secrets** e cole:
+
+```toml
+EMAIL_IMAP_HOST = "mail.seudominio.com.br"
+EMAIL_IMAP_PORT = "993"
+EMAIL_SMTP_HOST = "mail.seudominio.com.br"
+EMAIL_SMTP_PORT = "587"
+EMAIL_USER = "seuemail@seudominio.com.br"
+EMAIL_PASSWORD = "sua_senha_do_email"
+OPENAI_API_KEY = ""
+```
+
+Depois clique em **Save** e reinicie o app. O código aceita tanto `.env` local quanto os Secrets do Streamlit Cloud.
+
 ## Como rodar
 
 Com o ambiente virtual ativado:

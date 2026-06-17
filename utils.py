@@ -37,7 +37,23 @@ RESPONSIBLES = ["vendas", "financeiro", "entrega", "suporte", "diretoria"]
 
 
 def env(name: str, default: Optional[str] = None) -> Optional[str]:
-    value = os.getenv(name, default)
+    value = os.getenv(name)
+    if value not in (None, ""):
+        return str(value)
+
+    # Streamlit Cloud does not use .env files. It exposes values through
+    # st.secrets, configured in App settings > Secrets.
+    try:
+        import streamlit as st
+
+        if name in st.secrets:
+            secret_value = st.secrets[name]
+            if secret_value not in (None, ""):
+                return str(secret_value)
+    except Exception:
+        pass
+
+    value = default
     if value == "":
         return default
     return value
