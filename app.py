@@ -19,7 +19,7 @@ from database import (
     update_observation,
 )
 from email_client import EmailClient, send_email_smtp
-from gestao_click import GestaoClickClient, GestaoClickError, build_quote_payload
+from gestao_click import GestaoClickClient, build_quote_payload, validate_quote_payload
 from response_generator import (
     generate_response,
     list_responses,
@@ -213,8 +213,11 @@ def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, 
             observacoes=f"Origem: e-mail #{row['id']} - {txt(row['subject'])}\n\n{remove_quoted_replies(txt(row['body']))[:1500]}",
         )
         st.json(payload)
+        validation_errors = validate_quote_payload(payload)
+        if validation_errors:
+            st.error("Antes de criar no Gestão Click, corrija:\n\n- " + "\n- ".join(validation_errors))
         approved = st.checkbox("Aprovo criar este orçamento no Gestão Click", key=f"quote_approve_{row['id']}")
-        if st.button("Criar orçamento no Gestão Click", disabled=not approved, key=f"quote_create_{row['id']}"):
+        if st.button("Criar orçamento no Gestão Click", disabled=(not approved or bool(validation_errors)), key=f"quote_create_{row['id']}"):
             try:
                 result = gc.create_quote(payload)
                 log_event("INFO", "gestao_click_orcamento", json.dumps(result, ensure_ascii=False), conn)
@@ -283,7 +286,7 @@ def inbox_tab(default_filter: str | None = None, group: str | None = None, integ
     default_idx = category_options.index(default_filter) if default_filter in category_options else 0
     category = c2.selectbox("Categoria", category_options, index=default_idx, key=f"category_{key_prefix}")
     urgency = c3.selectbox("Urgência", ["Todas", 1, 2, 3, 4, 5], key=f"urgency_{key_prefix}")
-    status = c4.selectbox("Status", ["Todos", "novo", "resolvido"], key=f"status_{key_prefix}")
+    status = c4.selectbox("Status", ["novo", "Todos", "resolvido"], key=f"status_{key_prefix}")
     sender = c5.text_input("Remetente", key=f"sender_{key_prefix}")
 
     end_date = date.today()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
@@ -31,7 +32,13 @@ class GestaoClickClient:
             "secret-access-token": self.secret_access_token or "",
         }
 
-    def request(self, method: str, path: str, params: dict[str, Any] | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         query = f"?{urllib.parse.urlencode(params)}" if params else ""
         url = f"{self.base_url}/{path.strip('/')}{query}"
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
@@ -39,14 +46,19 @@ class GestaoClickClient:
         try:
             with urllib.request.urlopen(req, timeout=40) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            message = raw.strip() or str(exc)
+            raise GestaoClickError(f"HTTP {exc.code} em {url}: {message[:1200]}") from exc
         except Exception as exc:
-            raise GestaoClickError(str(exc)) from exc
+            raise GestaoClickError(f"Erro ao chamar {url}: {exc}") from exc
+
         try:
             result = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise GestaoClickError(f"Resposta inválida do Gestão Click: {raw[:300]}") from exc
         if str(result.get("status", "")).lower() not in ("success", "sucesso", "") and result.get("code") not in (200, "200"):
-            raise GestaoClickError(json.dumps(result, ensure_ascii=False)[:800])
+            raise GestaoClickError(json.dumps(result, ensure_ascii=False)[:1200])
         return result
 
     def search_clients(self, cnpj: str = "", email: str = "", nome: str = "") -> list[dict[str, Any]]:
@@ -89,7 +101,7 @@ def build_quote_payload(
 ) -> dict[str, Any]:
     payload_products = []
     for item in produtos:
-        product_id = str(item.get("produto_id", "")).strip()
+        product_id = str(item.get("produto_id") or item.get("id") or "").strip()
         nome = str(item.get("nome_produto") or item.get("produto") or "").strip()
         quantidade = str(item.get("quantidade") or "1").replace(",", ".")
         valor_venda = str(item.get("valor_venda") or "0").replace(",", ".")
@@ -104,7 +116,6 @@ def build_quote_payload(
             "desconto_porcentagem": "0.00",
         }
         if product_id:
-            product_payload["produto_id"] = product_id
             product_payload["id"] = product_id
         payload_products.append({"produto": product_payload})
 
@@ -118,3 +129,27 @@ def build_quote_payload(
         "observacoes_interna": "Criado pela Central de E-mails Novaprint após aprovação manual.",
         "produtos": payload_products,
     }
+
+
+def validate_quote_payload(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not str(payload.get("cliente_id") or "").strip():
+        errors.append("Informe o Cliente ID do Gestão Click.")
+    if not str(payload.get("codigo") or "").strip():
+        errors.append("Informe o número/código do orçamento.")
+    if not str(payload.get("situacao_id") or "").strip():
+        errors.append("Informe a Situação ID do orçamento em aberto.")
+    products = payload.get("produtos") or []
+    if not products:
+        errors.append("Informe pelo menos um produto.")
+    for idx, item in enumerate(products, start=1):
+        product = item.get("produto") or {}
+        if not str(product.get("id") or product.get("nome_produto") or "").strip():
+            errors.append(f"Produto {idx}: informe produto_id ou nome.")
+        try:
+            quantity = float(str(product.get("quantidade") or "0").replace(",", "."))
+        except ValueError:
+            quantity = 0
+        if quantity <= 0:
+            errors.append(f"Produto {idx}: quantidade precisa ser maior que zero.")
+    return errors
