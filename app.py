@@ -40,8 +40,14 @@ def txt(value: Any) -> str:
 
 
 def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
+    if isinstance(data, dict):
+        data = data.get("data") or [data]
+    if not isinstance(data, list):
+        data = [data]
     rows = []
     for item in data:
+        if not isinstance(item, dict):
+            item = {"valor": item}
         if kind == "clientes":
             rows.append(
                 {
@@ -292,7 +298,7 @@ def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, 
             codigo=codigo,
             situacao_id=situacao_id,
             produtos=produtos,
-            observacoes=f"Origem: e-mail #{row['id']} - {txt(row['subject'])}\n\n{remove_quoted_replies(txt(row['body']))[:1500]}",
+            observacoes=f"Origem: e-mail #{row['id']} - {txt(row['subject'])}",
         )
         st.markdown("**Resumo que será enviado ao Gestão Click**")
         st.write(
@@ -303,8 +309,6 @@ def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, 
                 "produtos": len(payload.get("produtos") or []),
             }
         )
-        with st.expander("Prévia técnica do payload"):
-            st.json(payload)
         validation_errors = validate_quote_payload(payload)
         if validation_errors:
             st.error("Antes de criar no Gestão Click, corrija:\n\n- " + "\n- ".join(validation_errors))
@@ -314,7 +318,6 @@ def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, 
                 result = gc.create_quote(payload)
                 log_event("INFO", "gestao_click_orcamento", json.dumps(result, ensure_ascii=False), conn)
                 st.success("Orçamento criado no Gestão Click.")
-                st.json(result)
             except Exception as exc:
                 log_event("ERROR", "gestao_click_orcamento", str(exc), conn)
                 st.error(f"Erro ao criar orçamento: {exc}")
@@ -323,38 +326,47 @@ def quote_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, 
 def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str, Any]) -> None:
     with st.expander("Gestão Click: financeiro e fiscal"):
         gc = GestaoClickClient()
+        client_key = f"fin_cliente_{row['id']}"
+        clients_key = f"fin_clients_{row['id']}"
         cnpj_detectado = first_value(detected.get("cnpj"))
         manual_cnpj = st.text_input("CNPJ do cliente", value=cnpj_detectado, key=f"fin_cnpj_{row['id']}")
-        cliente_id = st.text_input("Cliente ID no Gestão Click", key=f"fin_cliente_{row['id']}")
         c1, c2, c3 = st.columns(3)
         if c1.button("Buscar cliente", key=f"fin_find_client_{row['id']}"):
             try:
-                st.session_state[f"fin_clients_{row['id']}"] = gc.search_clients(cnpj=manual_cnpj)
+                clients = gc.search_clients(cnpj=manual_cnpj)
+                st.session_state[clients_key] = clients
+                if clients:
+                    first_client = clients[0]
+                    st.session_state[client_key] = str(first_client.get("id") or first_client.get("cliente_id") or "")
+                    st.success(f"Cliente localizado: {first_client.get('nome') or first_client.get('razao_social') or first_client.get('nome_fantasia') or 'sem nome'}")
+                    st.rerun()
+                else:
+                    st.warning("Nenhum cliente encontrado para este CNPJ.")
             except Exception as exc:
                 st.error(f"Erro ao buscar cliente: {exc}")
+
+        cliente_id = st.text_input("Cliente ID no Gestão Click", key=client_key)
         if c2.button("Consultar recebimentos", key=f"fin_receivables_{row['id']}"):
             try:
-                st.session_state[f"fin_receivables_{row['id']}"] = gc.list_receivables(cliente_id)
+                st.session_state[f"fin_receivables_data_{row['id']}"] = gc.list_receivables(cliente_id)
             except Exception as exc:
                 st.error(f"Erro ao consultar financeiro: {exc}")
         if c3.button("Consultar notas fiscais", key=f"fin_invoices_{row['id']}"):
             try:
-                st.session_state[f"fin_invoices_{row['id']}"] = gc.list_product_invoices(cliente_id)
+                st.session_state[f"fin_invoices_data_{row['id']}"] = gc.list_product_invoices(cliente_id)
             except Exception as exc:
                 st.error(f"Erro ao consultar notas: {exc}")
 
         for label, key in [
-            ("Clientes encontrados", f"fin_clients_{row['id']}"),
-            ("Recebimentos", f"fin_receivables_{row['id']}"),
-            ("Notas fiscais", f"fin_invoices_{row['id']}"),
+            ("Clientes encontrados", clients_key),
+            ("Recebimentos", f"fin_receivables_data_{row['id']}"),
+            ("Notas fiscais", f"fin_invoices_data_{row['id']}"),
         ]:
             data = st.session_state.get(key)
             if data:
                 st.markdown(f"**{label}**")
                 kind = "clientes" if "Clientes" in label else "recebimentos" if "Recebimentos" in label else "notas"
                 st.dataframe(safe_table_rows(data, kind), use_container_width=True, hide_index=True)
-                with st.expander(f"Ver retorno completo - {label}"):
-                    st.json(data)
 
         st.warning("Envio de nota, boleto ou resposta ao cliente deve ser feito somente após aprovação manual.")
         draft = st.text_area(
