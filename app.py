@@ -472,11 +472,27 @@ def config_tab() -> None:
         {"Variável": "OPENAI_API_KEY", "Status/valor": "configurado" if env("OPENAI_API_KEY") else "não configurado - usando fallback por regras"},
         {"Variável": "GESTAOCLICK_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_ACCESS_TOKEN") else "não configurado"},
         {"Variável": "GESTAOCLICK_SECRET_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_SECRET_ACCESS_TOKEN") else "não configurado"},
+        {"Variável": "GESTAOCLICK_DEFAULT_LOJA_ID", "Status/valor": env("GESTAOCLICK_DEFAULT_LOJA_ID", "não configurado")},
     ]
     st.dataframe(config, use_container_width=True, hide_index=True)
     st.divider()
     st.markdown("### Integrações")
     st.write("Gestão Click: clientes, produtos, orçamentos, recebimentos e notas fiscais. Toda ação de criação/envio exige aprovação manual.")
+    if st.button("Listar lojas do Gestão Click"):
+        try:
+            stores = GestaoClickClient().list_stores()
+            rows = [
+                {
+                    "id": txt(store.get("id") or store.get("loja_id")),
+                    "nome": txt(store.get("nome") or store.get("nome_loja") or store.get("razao_social")),
+                    "cnpj": txt(store.get("cnpj") or store.get("cpf_cnpj")),
+                }
+                for store in stores
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.info("Copie o ID da linha Novaprint e cole em GESTAOCLICK_DEFAULT_LOJA_ID nos Secrets do Streamlit.")
+        except Exception as exc:
+            st.error(f"Erro ao listar lojas: {exc}")
 
 
 def logs_tab() -> None:
