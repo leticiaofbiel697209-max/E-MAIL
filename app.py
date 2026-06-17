@@ -39,6 +39,47 @@ def txt(value: Any) -> str:
     return repair_mojibake("" if value is None else str(value))
 
 
+def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
+    rows = []
+    for item in data:
+        if kind == "clientes":
+            rows.append(
+                {
+                    "id": txt(item.get("id") or item.get("cliente_id")),
+                    "nome": txt(item.get("nome") or item.get("razao_social") or item.get("nome_fantasia")),
+                    "documento": txt(item.get("cpf_cnpj") or item.get("cnpj") or item.get("cpf")),
+                    "email": txt(item.get("email")),
+                    "loja": txt(item.get("nome_loja") or item.get("loja_id")),
+                }
+            )
+        elif kind == "recebimentos":
+            rows.append(
+                {
+                    "id": txt(item.get("id")),
+                    "codigo": txt(item.get("codigo")),
+                    "cliente": txt(item.get("nome_cliente")),
+                    "valor": txt(item.get("valor_total") or item.get("valor")),
+                    "vencimento": txt(item.get("data_vencimento")),
+                    "status": txt(item.get("liquidado")),
+                    "forma": txt(item.get("nome_forma_pagamento")),
+                    "loja": txt(item.get("nome_loja") or item.get("loja_id")),
+                }
+            )
+        elif kind == "notas":
+            rows.append(
+                {
+                    "id": txt(item.get("id")),
+                    "numero_nf": txt(item.get("numero_nf") or item.get("numero_nfe")),
+                    "cliente": txt(item.get("destinatario_nome") or item.get("nome_cliente")),
+                    "valor": txt(item.get("valor_total_nf") or item.get("valor_produtos")),
+                    "emissao": txt(item.get("data_emissao")),
+                    "situacao": txt(item.get("situacao_nf")),
+                    "loja": txt(item.get("nome_loja") or item.get("loja_id")),
+                }
+            )
+    return rows
+
+
 def get_conn() -> sqlite3.Connection:
     conn = get_connection()
     init_db(conn)
@@ -310,7 +351,10 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
             data = st.session_state.get(key)
             if data:
                 st.markdown(f"**{label}**")
-                st.dataframe(data, use_container_width=True)
+                kind = "clientes" if "Clientes" in label else "recebimentos" if "Recebimentos" in label else "notas"
+                st.dataframe(safe_table_rows(data, kind), use_container_width=True, hide_index=True)
+                with st.expander(f"Ver retorno completo - {label}"):
+                    st.json(data)
 
         st.warning("Envio de nota, boleto ou resposta ao cliente deve ser feito somente após aprovação manual.")
         draft = st.text_area(
@@ -329,7 +373,7 @@ def inbox_tab(default_filter: str | None = None, group: str | None = None, integ
     conn = get_conn()
     key_prefix = (default_filter or group or "todos").replace(" ", "_")
     st.subheader("Caixa de Entrada Inteligente")
-    c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1, 1, 1])
+    c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1, 1, 1, 1, 1.2])
     days = c1.number_input("Últimos dias", min_value=1, max_value=365, value=7, step=1, key=f"days_{key_prefix}")
     if c1.button("Processar novos e-mails", type="primary", key=f"process_{key_prefix}"):
         process_new_emails(int(days), include_old_unread=False)
@@ -339,6 +383,8 @@ def inbox_tab(default_filter: str | None = None, group: str | None = None, integ
     urgency = c3.selectbox("Urgência", ["Todas", 1, 2, 3, 4, 5], key=f"urgency_{key_prefix}")
     status = c4.selectbox("Status", ["novo", "Todos", "resolvido"], key=f"status_{key_prefix}")
     sender = c5.text_input("Remetente", key=f"sender_{key_prefix}")
+    sort_label = c6.selectbox("Ordem", ["Mais novo primeiro", "Mais antigo primeiro", "Urgência primeiro"], key=f"sort_{key_prefix}")
+    sort = {"Mais novo primeiro": "newest", "Mais antigo primeiro": "oldest", "Urgência primeiro": "urgent"}[sort_label]
 
     end_date = date.today()
     start_date = end_date - timedelta(days=int(days))
@@ -349,6 +395,7 @@ def inbox_tab(default_filter: str | None = None, group: str | None = None, integ
         "status": status,
         "date_start": start_date,
         "date_end": end_date,
+        "sort": sort,
     }
     rows = filtered_rows(conn, filters, group=group)
     if st.button("Reclassificar e-mails deste período", key=f"reclassify_{key_prefix}"):

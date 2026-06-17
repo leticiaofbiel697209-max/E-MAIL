@@ -19,18 +19,25 @@ class GestaoClickClient:
         self.base_url = (env("GESTAOCLICK_BASE_URL", "https://api.gestaoclick.com/api") or "").rstrip("/")
         self.access_token = env("GESTAOCLICK_ACCESS_TOKEN")
         self.secret_access_token = env("GESTAOCLICK_SECRET_ACCESS_TOKEN")
+        self.default_loja_id = env("GESTAOCLICK_DEFAULT_LOJA_ID")
 
     def is_configured(self) -> bool:
         return bool(self.base_url and self.access_token and self.secret_access_token)
 
     def _headers(self) -> dict[str, str]:
         if not self.is_configured():
-            raise GestaoClickError("Configure GESTAOCLICK_ACCESS_TOKEN e GESTAOCLICK_SECRET_ACCESS_TOKEN no .env.")
+            raise GestaoClickError("Configure GESTAOCLICK_ACCESS_TOKEN e GESTAOCLICK_SECRET_ACCESS_TOKEN nos Secrets.")
         return {
             "Content-Type": "application/json",
             "access-token": self.access_token or "",
             "secret-access-token": self.secret_access_token or "",
         }
+
+    def _store_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        params = dict(params or {})
+        if self.default_loja_id and "loja_id" not in params:
+            params["loja_id"] = self.default_loja_id
+        return params
 
     def request(
         self,
@@ -61,6 +68,10 @@ class GestaoClickClient:
             raise GestaoClickError(json.dumps(result, ensure_ascii=False)[:1200])
         return result
 
+    def list_stores(self) -> list[dict[str, Any]]:
+        result = self.request("GET", "/lojas")
+        return result.get("data") or []
+
     def search_clients(self, cnpj: str = "", email: str = "", nome: str = "") -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": 20}
         if cnpj:
@@ -69,11 +80,11 @@ class GestaoClickClient:
             params["email"] = email
         elif nome:
             params["nome"] = nome
-        result = self.request("GET", "/clientes", params=params)
+        result = self.request("GET", "/clientes", params=self._store_params(params))
         return result.get("data") or []
 
     def search_products(self, nome: str) -> list[dict[str, Any]]:
-        result = self.request("GET", "/produtos", params={"nome": nome, "limit": 20})
+        result = self.request("GET", "/produtos", params=self._store_params({"nome": nome, "limit": 20}))
         return result.get("data") or []
 
     def list_quote_situations(self) -> list[dict[str, Any]]:
@@ -84,12 +95,22 @@ class GestaoClickClient:
         return self.request("POST", "/orcamentos", payload=payload)
 
     def list_receivables(self, cliente_id: str | int, limit: int = 20) -> list[dict[str, Any]]:
-        result = self.request("GET", "/recebimentos", params={"cliente_id": cliente_id, "limit": limit})
+        params = self._store_params({"cliente_id": cliente_id, "limit": limit})
+        result = self.request("GET", "/recebimentos", params=params)
         return result.get("data") or []
 
     def list_product_invoices(self, cliente_id: str | int, limit: int = 20) -> list[dict[str, Any]]:
-        result = self.request("GET", "/notas_fiscais_produtos", params={"destinatario_id": cliente_id, "limit": limit})
-        return result.get("data") or []
+        attempts = [
+            {"destinatario_id": cliente_id, "limit": limit},
+            {"destinatario_id_cliente": cliente_id, "limit": limit},
+            {"cliente_id": cliente_id, "limit": limit},
+        ]
+        for params in attempts:
+            result = self.request("GET", "/notas_fiscais_produtos", params=self._store_params(params))
+            data = result.get("data") or []
+            if data:
+                return data
+        return []
 
 
 def only_digits(value: str) -> str:
@@ -123,7 +144,8 @@ def build_quote_payload(
             product_payload["id"] = int(product_id) if product_id.isdigit() else product_id
         payload_products.append({"produto": product_payload})
 
-    return {
+    loja_id = env("GESTAOCLICK_DEFAULT_LOJA_ID")
+    payload: dict[str, Any] = {
         "tipo": "produto",
         "codigo": int(codigo) if str(codigo).isdigit() else codigo,
         "cliente_id": int(cliente_id) if str(cliente_id).isdigit() else cliente_id,
@@ -133,10 +155,15 @@ def build_quote_payload(
         "observacoes_interna": "Criado pela Central de E-mails Novaprint após aprovação manual.",
         "produtos": payload_products,
     }
+    if loja_id:
+        payload["loja_id"] = int(loja_id) if str(loja_id).isdigit() else loja_id
+    return payload
 
 
 def validate_quote_payload(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    if not str(payload.get("loja_id") or "").strip():
+        errors.append("Configure GESTAOCLICK_DEFAULT_LOJA_ID com o ID da loja Novaprint.")
     if not str(payload.get("cliente_id") or "").strip():
         errors.append("Informe o Cliente ID do Gestão Click.")
     if not str(payload.get("codigo") or "").strip():

@@ -80,10 +80,13 @@ OPENAI_API_KEY = ""
 GESTAOCLICK_BASE_URL = "https://api.gestaoclick.com/api"
 GESTAOCLICK_ACCESS_TOKEN = "seu_access_token"
 GESTAOCLICK_SECRET_ACCESS_TOKEN = "seu_secret_access_token"
+GESTAOCLICK_DEFAULT_LOJA_ID = "id_da_loja_novaprint"
 GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID = "id_da_situacao_em_aberto"
 ```
 
 Depois clique em **Save** e reinicie o app. O código aceita tanto `.env` local quanto os Secrets do Streamlit Cloud.
+
+Use sempre o `GESTAOCLICK_DEFAULT_LOJA_ID` da **Novaprint**. Sem ele, o Gestão Click pode retornar dados de outra loja da conta, como Techtoner.
 
 ## Como rodar
 

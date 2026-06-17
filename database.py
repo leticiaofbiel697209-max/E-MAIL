@@ -224,7 +224,14 @@ def list_emails(filters: dict[str, Any] | None = None, conn: sqlite3.Connection 
         clauses.append("substr(date, 1, 10) <= ?")
         params.append(str(filters["date_end"]))
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    rows = conn.execute(f"SELECT * FROM emails{where} ORDER BY urgency DESC, date DESC, id DESC", params).fetchall()
+    sort = filters.get("sort", "newest")
+    if sort == "oldest":
+        order_by = "date ASC, id ASC"
+    elif sort == "urgent":
+        order_by = "urgency DESC, date DESC, id DESC"
+    else:
+        order_by = "date DESC, id DESC"
+    rows = conn.execute(f"SELECT * FROM emails{where} ORDER BY {order_by}", params).fetchall()
     if close:
         conn.close()
     return rows
