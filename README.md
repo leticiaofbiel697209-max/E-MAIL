@@ -84,13 +84,25 @@ GESTAOCLICK_ACCESS_TOKEN = "seu_access_token"
 GESTAOCLICK_SECRET_ACCESS_TOKEN = "seu_secret_access_token"
 GESTAOCLICK_DEFAULT_LOJA_ID = "id_da_loja_novaprint"
 GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID = "id_da_situacao_em_aberto"
+GESTAOCLICK_NOTA_LINK_TEMPLATE = ""
+GESTAOCLICK_BOLETO_LINK_TEMPLATE = ""
 ```
 
 Depois clique em **Save** e reinicie o app. O código aceita tanto `.env` local quanto os Secrets do Streamlit Cloud.
 
 Use sempre o `GESTAOCLICK_DEFAULT_LOJA_ID` da **Novaprint**. Sem ele, o Gestão Click pode retornar dados de outra loja da conta, como Techtoner.
 
+Se a API do Gestão Click não retornar link público da nota ou boleto, configure os templates de link. Placeholders disponíveis: `{id}`, `{codigo}`, `{numero}`, `{chave}` e `{cliente_id}`.
+
 Para SMTP na porta `587`, use `EMAIL_SMTP_USE_SSL = "false"` porque o app usa STARTTLS. Para porta `465`, use `EMAIL_SMTP_USE_SSL = "true"`.
+
+Exemplo para servidor com porta 465:
+
+```toml
+EMAIL_SMTP_HOST = "mail.novaprintbrasil.com.br"
+EMAIL_SMTP_PORT = "465"
+EMAIL_SMTP_USE_SSL = "true"
+```
 
 Na aba **Configurações**, use **Enviar teste SMTP** antes de enviar para cliente. Se o teste não chegar, confira spam/lixo eletrônico, senha de aplicativo e liberação de SMTP no provedor.
 

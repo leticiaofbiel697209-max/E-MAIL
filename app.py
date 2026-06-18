@@ -126,6 +126,18 @@ def build_finance_email_body(
     return "\n".join(lines)
 
 
+def send_direct_reply(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    subject: str,
+    body: str,
+    log_source: str,
+) -> None:
+    send_email_smtp(txt(row["sender_email"]), subject, body, txt(row["message_id"]))
+    update_email_status(row["id"], "resolvido", conn)
+    log_event("INFO", log_source, f"E-mail {row['id']} enviado para {txt(row['sender_email'])} e marcado como resolvido.", conn)
+
+
 def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
     if isinstance(data, dict):
         data = data.get("data") or [data]
@@ -502,15 +514,28 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 height=220,
                 key=f"fin_auto_preview_{row['id']}_{receipt_index}_{invoice_index}_{hash(invoice_link + receipt_link)}",
             )
-            approve_auto = st.checkbox("Aprovo criar rascunho com estes itens", key=f"fin_auto_approve_{row['id']}")
-            if st.button(
-                "Criar e-mail com nota/boleto",
+            approve_auto = st.checkbox("Aprovo criar/enviar e-mail com estes itens", key=f"fin_auto_approve_{row['id']}")
+            d1, d2 = st.columns(2)
+            if d1.button(
+                "Criar rascunho com nota/boleto",
                 disabled=(not approve_auto or not (receivable or invoice)),
                 key=f"fin_auto_draft_{row['id']}",
             ):
                 save_generated_response(conn, row["id"], txt(row["sender_email"]), f"Re: {txt(row['subject'])}", auto_body)
                 log_event("INFO", "rascunho_financeiro_auto", f"E-mail {row['id']} com nota/boleto selecionados.", conn)
                 st.success("Rascunho criado em Respostas Geradas. Revise e confirme o envio.")
+            if d2.button(
+                "Enviar agora e marcar resolvido",
+                disabled=(not approve_auto or not (receivable or invoice)),
+                key=f"fin_auto_send_{row['id']}",
+            ):
+                try:
+                    send_direct_reply(conn, row, f"Re: {txt(row['subject'])}", auto_body, "envio_financeiro_direto")
+                    st.success("E-mail enviado e marcado como resolvido.")
+                    st.rerun()
+                except Exception as exc:
+                    log_event("ERROR", "envio_financeiro_direto", str(exc), conn)
+                    st.error(f"Erro ao enviar: {exc}")
 
         st.warning("Envio de nota, boleto ou resposta ao cliente deve ser feito somente após aprovação manual.")
         draft = st.text_area(
@@ -523,6 +548,14 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
             save_generated_response(conn, row["id"], txt(row["sender_email"]), f"Re: {txt(row['subject'])}", draft)
             log_event("INFO", "rascunho_financeiro_aprovado", f"E-mail {row['id']}", conn)
             st.success("Rascunho financeiro gerado. O envio ainda exige confirmação na aba Respostas Geradas.")
+        if st.button("Enviar resposta financeira agora e marcar resolvido", disabled=not approved, key=f"fin_send_direct_{row['id']}"):
+            try:
+                send_direct_reply(conn, row, f"Re: {txt(row['subject'])}", draft, "envio_financeiro_manual")
+                st.success("E-mail enviado e marcado como resolvido.")
+                st.rerun()
+            except Exception as exc:
+                log_event("ERROR", "envio_financeiro_manual", str(exc), conn)
+                st.error(f"Erro ao enviar: {exc}")
 
 
 def inbox_tab(default_filter: str | None = None, group: str | None = None, integration_mode: str | None = None) -> None:
@@ -533,6 +566,8 @@ def inbox_tab(default_filter: str | None = None, group: str | None = None, integ
     days = c1.number_input("Últimos dias", min_value=1, max_value=365, value=7, step=1, key=f"days_{key_prefix}")
     if c1.button("Processar novos e-mails", type="primary", key=f"process_{key_prefix}"):
         process_new_emails(int(days), include_old_unread=False)
+    if c1.button("Atualizar tela", key=f"refresh_{key_prefix}"):
+        st.rerun()
     category_options = ["Todos"] + CATEGORIES
     default_idx = category_options.index(default_filter) if default_filter in category_options else 0
     category = c2.selectbox("Categoria", category_options, index=default_idx, key=f"category_{key_prefix}")
