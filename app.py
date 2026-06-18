@@ -61,6 +61,8 @@ def find_finance_link(item: Any) -> str:
 def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
     if not template or not item:
         return ""
+    if not any(token in template for token in ("{id}", "{codigo}", "{numero}", "{chave}", "{cliente_id}")):
+        return ""
     values = {
         "id": txt(item.get("id")),
         "codigo": txt(item.get("codigo")),
@@ -703,6 +705,8 @@ def config_tab() -> None:
         {"Variável": "EMAIL_PASSWORD", "Status/valor": "configurado" if env("EMAIL_PASSWORD") else "não configurado"},
         {"Variável": "EMAIL_FROM_NAME", "Status/valor": env("EMAIL_FROM_NAME", "Novaprint")},
         {"Variável": "OPENAI_API_KEY", "Status/valor": "configurado" if env("OPENAI_API_KEY") else "não configurado - usando fallback por regras"},
+        {"Variável": "GEMINI_API_KEY", "Status/valor": "configurado" if env("GEMINI_API_KEY") else "não configurado"},
+        {"Variável": "GEMINI_MODEL", "Status/valor": env("GEMINI_MODEL", "gemini-1.5-flash")},
         {"Variável": "GESTAOCLICK_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_ACCESS_TOKEN") else "não configurado"},
         {"Variável": "GESTAOCLICK_SECRET_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_SECRET_ACCESS_TOKEN") else "não configurado"},
         {"Variável": "GESTAOCLICK_DEFAULT_LOJA_ID", "Status/valor": env("GESTAOCLICK_DEFAULT_LOJA_ID", "não configurado")},
@@ -719,6 +723,12 @@ def config_tab() -> None:
     if smtp_port == "465" and smtp_ssl not in ("1", "true", "sim", "yes"):
         st.warning("Para porta 465, normalmente use EMAIL_SMTP_USE_SSL=true.")
     st.caption("Se o SMTP configurado falhar, o app também tenta mail./smtp. do domínio, 465/SSL e 587/STARTTLS automaticamente.")
+    for label, template in [
+        ("nota", env("GESTAOCLICK_NOTA_LINK_TEMPLATE", "")),
+        ("boleto", env("GESTAOCLICK_BOLETO_LINK_TEMPLATE", "")),
+    ]:
+        if template and not any(token in template for token in ("{id}", "{codigo}", "{numero}", "{chave}", "{cliente_id}")):
+            st.warning(f"O template de {label} está fixo. Use um modelo com {{id}}, {{codigo}}, {{numero}}, {{chave}} ou {{cliente_id}} para variar por cliente/documento.")
     test_to = st.text_input("Enviar teste para", value=env("EMAIL_USER", ""), key="smtp_test_to")
     test_confirm = st.checkbox("Confirmo enviar um e-mail de teste", key="smtp_test_confirm")
     if st.button("Enviar teste SMTP", disabled=not test_confirm):

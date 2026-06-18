@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import json
+import urllib.request
 from typing import Any
 
 try:
@@ -10,6 +12,27 @@ except Exception:
 
 from database import log_event
 from utils import env, extract_requested_items, find_entities, normalize_for_search, now_iso, remove_quoted_replies
+
+
+def _gemini_text(prompt: str, temperature: float = 0.3) -> str:
+    api_key = env("GEMINI_API_KEY")
+    if not api_key:
+        return ""
+    model = env("GEMINI_MODEL", "gemini-1.5-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature},
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=40) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    return (data["candidates"][0]["content"]["parts"][0].get("text") or "").strip()
 
 
 def generate_response(email_row: sqlite3.Row | dict[str, Any]) -> str:
@@ -22,8 +45,7 @@ def generate_response(email_row: sqlite3.Row | dict[str, Any]) -> str:
     detected = find_entities(f"{subject}\n{body}")
     items = extract_requested_items(body)
 
-    api_key = env("OPENAI_API_KEY")
-    if not api_key or OpenAI is None:
+    def fallback_response() -> str:
         if category_key == "pedido de orcamento":
             itens = "\n".join(f"- {item['quantidade']} x {item['produto']}" for item in items) or "- itens e quantidades ainda precisam ser confirmados"
             return f"""Olá, {sender}.
@@ -60,7 +82,6 @@ Obrigado pelo contato. Vamos verificar as informações e retornar com a tratati
 Atenciosamente,
 Equipe Novaprint"""
 
-    client = OpenAI(api_key=api_key)
     prompt = f"""
 Crie uma resposta profissional em português para o cliente da Novaprint.
 Não invente números de pedido, boleto, prazo ou nota fiscal.
@@ -76,6 +97,15 @@ Assunto original: {subject}
 Corpo original:
 {body[:6000]}
 """
+    api_key = env("OPENAI_API_KEY")
+    if not api_key or OpenAI is None:
+        try:
+            gemini_response = _gemini_text(prompt, temperature=0.3)
+            return gemini_response or fallback_response()
+        except Exception:
+            return fallback_response()
+
+    client = OpenAI(api_key=api_key)
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",

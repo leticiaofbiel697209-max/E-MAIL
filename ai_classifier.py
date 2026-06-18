@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.request
 from typing import Any
 
 try:
@@ -9,6 +11,36 @@ except Exception:
     OpenAI = None
 
 from utils import CATEGORIES, RESPONSIBLES, env, extract_requested_items, find_entities, normalize_for_search, remove_quoted_replies
+
+
+def _gemini_text(prompt: str) -> str:
+    api_key = env("GEMINI_API_KEY")
+    if not api_key:
+        return ""
+    model = env("GEMINI_MODEL", "gemini-1.5-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "response_mime_type": "application/json"},
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=40) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    return data["candidates"][0]["content"]["parts"][0].get("text", "")
+
+
+def _parse_json_text(text: str) -> dict[str, Any]:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    return json.loads(cleaned or "{}")
 
 
 def _fallback_classification(subject: str, body: str) -> dict[str, Any]:
@@ -57,10 +89,6 @@ def _fallback_classification(subject: str, body: str) -> dict[str, Any]:
 def classify_email(subject: str, body: str) -> dict[str, Any]:
     local_result = _fallback_classification(subject, body)
     api_key = env("OPENAI_API_KEY")
-    if not api_key or OpenAI is None:
-        return local_result
-
-    client = OpenAI(api_key=api_key)
     prompt = f"""
 Você é um assistente operacional da Novaprint. Classifique o e-mail abaixo.
 Responda APENAS JSON válido com os campos:
@@ -74,6 +102,25 @@ Assunto: {subject}
 Corpo principal, sem histórico citado:
 {remove_quoted_replies(body)[:6000]}
 """
+    if not api_key or OpenAI is None:
+        try:
+            gemini_content = _gemini_text(prompt)
+            if not gemini_content:
+                return local_result
+            data = _parse_json_text(gemini_content)
+            if data.get("category") not in CATEGORIES:
+                data["category"] = local_result["category"]
+            if data.get("responsible") not in RESPONSIBLES:
+                data["responsible"] = local_result["responsible"]
+            data["urgency"] = max(1, min(5, int(data.get("urgency", local_result["urgency"]))))
+            detected = find_entities(f"{subject}\n{body}")
+            ai_detected = data.get("detected") or {}
+            data["detected"] = {k: sorted(set((ai_detected.get(k) or []) + detected.get(k, []))) for k in detected}
+            return data
+        except Exception:
+            return local_result
+
+    client = OpenAI(api_key=api_key)
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",

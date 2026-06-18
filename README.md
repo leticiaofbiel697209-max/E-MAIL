@@ -84,6 +84,8 @@ GESTAOCLICK_ACCESS_TOKEN = "seu_access_token"
 GESTAOCLICK_SECRET_ACCESS_TOKEN = "seu_secret_access_token"
 GESTAOCLICK_DEFAULT_LOJA_ID = "id_da_loja_novaprint"
 GESTAOCLICK_DEFAULT_SITUACAO_ORCAMENTO_ID = "id_da_situacao_em_aberto"
+GEMINI_API_KEY = ""
+GEMINI_MODEL = "gemini-1.5-flash"
 GESTAOCLICK_NOTA_LINK_TEMPLATE = ""
 GESTAOCLICK_BOLETO_LINK_TEMPLATE = ""
 ```
@@ -93,6 +95,8 @@ Depois clique em **Save** e reinicie o app. O código aceita tanto `.env` local 
 Use sempre o `GESTAOCLICK_DEFAULT_LOJA_ID` da **Novaprint**. Sem ele, o Gestão Click pode retornar dados de outra loja da conta, como Techtoner.
 
 Se a API do Gestão Click não retornar link público da nota ou boleto, configure os templates de link. Placeholders disponíveis: `{id}`, `{codigo}`, `{numero}`, `{chave}` e `{cliente_id}`.
+
+Não use link fixo, por exemplo `https://gestaoclick.com/boleto/azaojQQ`, porque ele será sempre o mesmo para todos os clientes. Use somente se houver uma parte variável, como `https://site.com/boleto/{id}` ou `https://site.com/danfe/{chave}`.
 
 Para SMTP na porta `587`, use `EMAIL_SMTP_USE_SSL = "false"` porque o app usa STARTTLS. Para porta `465`, use `EMAIL_SMTP_USE_SSL = "true"`.
 
