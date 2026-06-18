@@ -98,7 +98,7 @@ class GestaoClickClient:
         result = self.request("GET", f"/recebimentos/{receivable_id}")
         return result.get("data") or {}
 
-    def list_receivables(self, cliente_id: str | int, limit: int = 20) -> list[dict[str, Any]]:
+    def list_receivables(self, cliente_id: str | int, limit: int = 100) -> list[dict[str, Any]]:
         params = self._store_params({"cliente_id": cliente_id, "limit": limit})
         result = self.request("GET", "/recebimentos", params=params)
         items = result.get("data") or []
@@ -115,6 +115,21 @@ class GestaoClickClient:
             enriched.append(item)
         return enriched
 
+    def list_receivables_for_clients(self, cliente_ids: list[str | int], limit: int = 100) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for cliente_id in cliente_ids:
+            if not str(cliente_id or "").strip():
+                continue
+            for item in self.list_receivables(cliente_id, limit=limit):
+                item_id = str(item.get("id") or item.get("codigo") or "")
+                if item_id and item_id in seen:
+                    continue
+                if item_id:
+                    seen.add(item_id)
+                merged.append(item)
+        return merged
+
     def get_product_invoice(self, invoice_id: str | int) -> dict[str, Any]:
         result = self.request("GET", f"/notas_fiscais_produtos/{invoice_id}")
         return result.get("data") or {}
@@ -124,7 +139,7 @@ class GestaoClickClient:
         cliente_id: str | int,
         cnpj: str = "",
         numero_nf: str = "",
-        limit: int = 20,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         attempts = [
             {"destinatario_id": cliente_id, "limit": limit},
@@ -135,11 +150,12 @@ class GestaoClickClient:
             attempts.append({"cpf_cnpj": only_digits(cnpj), "limit": limit})
         if numero_nf:
             attempts.append({"numero_nf": numero_nf, "limit": limit})
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
         for params in attempts:
             result = self.request("GET", "/notas_fiscais_produtos", params=self._store_params(params))
             data = filter_invoices_for_client(result.get("data") or [], cliente_id, cnpj, numero_nf)
             if data:
-                enriched = []
                 for item in data:
                     item_id = item.get("id") if isinstance(item, dict) else None
                     if item_id:
@@ -148,9 +164,34 @@ class GestaoClickClient:
                         except Exception:
                             pass
                     if isinstance(item, dict):
-                        enriched.append(item)
-                return enriched
-        return []
+                        dedupe_id = str(item.get("id") or item.get("numero_nf") or item.get("numero_nfe") or "")
+                        if dedupe_id and dedupe_id in seen:
+                            continue
+                        if dedupe_id:
+                            seen.add(dedupe_id)
+                        merged.append(item)
+        return merged
+
+    def list_product_invoices_for_clients(
+        self,
+        cliente_ids: list[str | int],
+        cnpj: str = "",
+        numero_nf: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for cliente_id in cliente_ids:
+            if not str(cliente_id or "").strip():
+                continue
+            for item in self.list_product_invoices(cliente_id, cnpj=cnpj, numero_nf=numero_nf, limit=limit):
+                item_id = str(item.get("id") or item.get("numero_nf") or item.get("numero_nfe") or "")
+                if item_id and item_id in seen:
+                    continue
+                if item_id:
+                    seen.add(item_id)
+                merged.append(item)
+        return merged
 
 
 def only_digits(value: str) -> str:
@@ -186,10 +227,14 @@ def filter_invoices_for_client(
             item.get("documento"),
             item.get("destinatario_cpf_cnpj"),
             item.get("destinatario_documento"),
+            item.get("destinatario_cnpj"),
+            item.get("destinatario_cpf"),
             cliente.get("cpf_cnpj"),
             cliente.get("cnpj"),
+            cliente.get("cpf"),
             destinatario.get("cpf_cnpj"),
             destinatario.get("cnpj"),
+            destinatario.get("cpf"),
             destinatario.get("documento"),
         ]
         possible_numbers = [

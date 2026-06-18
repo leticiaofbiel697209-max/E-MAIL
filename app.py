@@ -61,7 +61,7 @@ def find_finance_link(item: Any) -> str:
 def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
     if not template or not item:
         return ""
-    if not any(token in template for token in ("{id}", "{codigo}", "{numero}", "{chave}", "{cliente_id}")):
+    if not any(token in template for token in ("{id}", "{codigo}", "{numero}", "{chave}", "{cliente_id}", "{hash}")):
         return ""
     values = {
         "id": txt(item.get("id")),
@@ -69,6 +69,7 @@ def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
         "numero": txt(item.get("numero_nf") or item.get("numero_nfe") or item.get("numero") or item.get("codigo") or item.get("id")),
         "chave": txt(item.get("chave") or item.get("chave_nfe") or item.get("chave_acesso")),
         "cliente_id": txt(item.get("cliente_id") or item.get("destinatario_id")),
+        "hash": txt(item.get("hash") or item.get("codigo_hash") or item.get("hash_publico") or item.get("token")),
     }
     try:
         return template.format(**values)
@@ -133,6 +134,19 @@ def suggested_customer_email(row: sqlite3.Row, clients: list[dict[str, Any]] | N
         if isinstance(client, dict) and txt(client.get("email")):
             return txt(client.get("email"))
     return txt(row["sender_email"])
+
+
+def selected_client_ids(primary_id: str, clients: list[dict[str, Any]] | None = None) -> list[str]:
+    ids = []
+    if txt(primary_id):
+        ids.append(txt(primary_id))
+    for client in clients or []:
+        if not isinstance(client, dict):
+            continue
+        client_id = txt(client.get("id") or client.get("cliente_id"))
+        if client_id and client_id not in ids:
+            ids.append(client_id)
+    return ids
 
 
 def send_direct_reply(
@@ -460,12 +474,14 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         cliente_id = st.text_input("Cliente ID no Gestão Click", key=client_key)
         if c2.button("Consultar recebimentos", key=f"fin_receivables_{row['id']}"):
             try:
-                st.session_state[f"fin_receivables_data_{row['id']}"] = gc.list_receivables(cliente_id)
+                client_ids = selected_client_ids(cliente_id, st.session_state.get(clients_key) or [])
+                st.session_state[f"fin_receivables_data_{row['id']}"] = gc.list_receivables_for_clients(client_ids)
             except Exception as exc:
                 st.error(f"Erro ao consultar financeiro: {exc}")
         if c3.button("Consultar notas fiscais", key=f"fin_invoices_{row['id']}"):
             try:
-                notas = gc.list_product_invoices(cliente_id, cnpj=manual_cnpj, numero_nf=numero_nf)
+                client_ids = selected_client_ids(cliente_id, st.session_state.get(clients_key) or [])
+                notas = gc.list_product_invoices_for_clients(client_ids, cnpj=manual_cnpj, numero_nf=numero_nf)
                 st.session_state[f"fin_invoices_data_{row['id']}"] = notas
                 if not notas:
                     st.warning("Nenhuma nota correspondente a este Cliente ID/CNPJ foi encontrada.")
@@ -727,8 +743,8 @@ def config_tab() -> None:
         ("nota", env("GESTAOCLICK_NOTA_LINK_TEMPLATE", "")),
         ("boleto", env("GESTAOCLICK_BOLETO_LINK_TEMPLATE", "")),
     ]:
-        if template and not any(token in template for token in ("{id}", "{codigo}", "{numero}", "{chave}", "{cliente_id}")):
-            st.warning(f"O template de {label} está fixo. Use um modelo com {{id}}, {{codigo}}, {{numero}}, {{chave}} ou {{cliente_id}} para variar por cliente/documento.")
+        if template and not any(token in template for token in ("{id}", "{codigo}", "{numero}", "{chave}", "{cliente_id}", "{hash}")):
+            st.warning(f"O template de {label} está fixo. Use um modelo com {{hash}}, {{id}}, {{codigo}}, {{numero}}, {{chave}} ou {{cliente_id}} para variar por cliente/documento.")
     test_to = st.text_input("Enviar teste para", value=env("EMAIL_USER", ""), key="smtp_test_to")
     test_confirm = st.checkbox("Confirmo enviar um e-mail de teste", key="smtp_test_confirm")
     if st.button("Enviar teste SMTP", disabled=not test_confirm):
