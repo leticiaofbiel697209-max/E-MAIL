@@ -94,10 +94,30 @@ class GestaoClickClient:
     def create_quote(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/orcamentos", payload=payload)
 
+    def get_receivable(self, receivable_id: str | int) -> dict[str, Any]:
+        result = self.request("GET", f"/recebimentos/{receivable_id}")
+        return result.get("data") or {}
+
     def list_receivables(self, cliente_id: str | int, limit: int = 20) -> list[dict[str, Any]]:
         params = self._store_params({"cliente_id": cliente_id, "limit": limit})
         result = self.request("GET", "/recebimentos", params=params)
-        return result.get("data") or []
+        items = result.get("data") or []
+        enriched = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if item_id:
+                try:
+                    item = {**item, **self.get_receivable(item_id)}
+                except Exception:
+                    pass
+            enriched.append(item)
+        return enriched
+
+    def get_product_invoice(self, invoice_id: str | int) -> dict[str, Any]:
+        result = self.request("GET", f"/notas_fiscais_produtos/{invoice_id}")
+        return result.get("data") or {}
 
     def list_product_invoices(
         self,
@@ -119,7 +139,17 @@ class GestaoClickClient:
             result = self.request("GET", "/notas_fiscais_produtos", params=self._store_params(params))
             data = filter_invoices_for_client(result.get("data") or [], cliente_id, cnpj, numero_nf)
             if data:
-                return data
+                enriched = []
+                for item in data:
+                    item_id = item.get("id") if isinstance(item, dict) else None
+                    if item_id:
+                        try:
+                            item = {**item, **self.get_product_invoice(item_id)}
+                        except Exception:
+                            pass
+                    if isinstance(item, dict):
+                        enriched.append(item)
+                return enriched
         return []
 
 

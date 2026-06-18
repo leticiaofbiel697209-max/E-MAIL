@@ -33,6 +33,15 @@ def _smtp_config() -> tuple[str, int, str, str, bool]:
     return host, port, user, password, use_ssl or port == 465
 
 
+def _smtp_candidates(host: str, port: int, use_ssl: bool) -> list[tuple[str, int, bool]]:
+    candidates = [(host, port, use_ssl)]
+    for fallback_port, fallback_ssl in ((465, True), (587, False)):
+        candidate = (host, fallback_port, fallback_ssl)
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
 class EmailClient:
     def __init__(self) -> None:
         self.imap_host, self.imap_port, self.user, self.password = _imap_config()
@@ -185,11 +194,30 @@ def send_email_smtp(
         maintype, subtype = mime_type.split("/", 1)
         msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
 
-    smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
-    with smtp_cls(host, port, timeout=30) as smtp:
-        if not use_ssl:
-            smtp.starttls()
-        smtp.login(user, password)
-        refused = smtp.send_message(msg)
-        if refused:
-            raise RuntimeError(f"SMTP recusou destinatário(s): {refused}")
+    connection_errors = []
+    for candidate_host, candidate_port, candidate_ssl in _smtp_candidates(host, port, use_ssl):
+        smtp_cls = smtplib.SMTP_SSL if candidate_ssl else smtplib.SMTP
+        mode = "SSL" if candidate_ssl else "STARTTLS"
+        try:
+            with smtp_cls(candidate_host, candidate_port, timeout=30) as smtp:
+                if not candidate_ssl:
+                    smtp.starttls()
+                smtp.login(user, password)
+                refused = smtp.send_message(msg)
+                if refused:
+                    raise RuntimeError(f"SMTP recusou destinatário(s): {refused}")
+                return
+        except (ConnectionRefusedError, TimeoutError, OSError, smtplib.SMTPConnectError) as exc:
+            connection_errors.append(f"{candidate_host}:{candidate_port} ({mode}) -> {exc}")
+            continue
+        except smtplib.SMTPAuthenticationError as exc:
+            raise RuntimeError("SMTP conectou, mas recusou login. Confira EMAIL_USER e EMAIL_PASSWORD/senha de aplicativo.") from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise RuntimeError(f"SMTP recusou o destinatário: {exc.recipients}") from exc
+        except smtplib.SMTPException as exc:
+            raise RuntimeError(f"Erro SMTP em {candidate_host}:{candidate_port} ({mode}): {exc}") from exc
+    attempts = " | ".join(connection_errors)
+    raise RuntimeError(
+        "Não foi possível conectar ao SMTP. Confira EMAIL_SMTP_HOST, porta e SSL nos Secrets. "
+        f"Tentativas: {attempts}"
+    )

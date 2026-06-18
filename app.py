@@ -457,6 +457,20 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
             invoice_index = invoice_options.index(selected_invoice) - 1
             receivable = receivables[receipt_index] if receipt_index >= 0 and receipt_index < len(receivables) else None
             invoice = invoices[invoice_index] if invoice_index >= 0 and invoice_index < len(invoices) else None
+            invoice_link = st.text_input(
+                "Link da nota fiscal",
+                value=find_finance_link(invoice) if invoice else "",
+                key=f"fin_invoice_link_{row['id']}_{invoice_index}",
+            )
+            receipt_link = st.text_input(
+                "Link do boleto/recebimento",
+                value=find_finance_link(receivable) if receivable else "",
+                key=f"fin_receipt_link_{row['id']}_{receipt_index}",
+            )
+            if invoice and invoice_link:
+                invoice = {**invoice, "link_manual": invoice_link}
+            if receivable and receipt_link:
+                receivable = {**receivable, "link_manual": receipt_link}
             auto_body = build_finance_email_body(txt(row["sender_name"]) or txt(row["sender_email"]), receivable, invoice)
             st.text_area("Prévia do e-mail financeiro", auto_body, height=220, key=f"fin_auto_preview_{row['id']}")
             approve_auto = st.checkbox("Aprovo criar rascunho com estes itens", key=f"fin_auto_approve_{row['id']}")
@@ -611,6 +625,13 @@ def config_tab() -> None:
     st.dataframe(config, use_container_width=True, hide_index=True)
     st.divider()
     st.markdown("### Teste de envio SMTP")
+    smtp_port = txt(env("EMAIL_SMTP_PORT", "587"))
+    smtp_ssl = txt(env("EMAIL_SMTP_USE_SSL", "false")).lower()
+    if smtp_port == "587" and smtp_ssl in ("1", "true", "sim", "yes"):
+        st.warning("Para porta 587, normalmente use EMAIL_SMTP_USE_SSL=false. O app usa STARTTLS nessa porta.")
+    if smtp_port == "465" and smtp_ssl not in ("1", "true", "sim", "yes"):
+        st.warning("Para porta 465, normalmente use EMAIL_SMTP_USE_SSL=true.")
+    st.caption("Se a porta configurada recusar conexão, o app também tenta 465/SSL e 587/STARTTLS automaticamente.")
     test_to = st.text_input("Enviar teste para", value=env("EMAIL_USER", ""), key="smtp_test_to")
     test_confirm = st.checkbox("Confirmo enviar um e-mail de teste", key="smtp_test_confirm")
     if st.button("Enviar teste SMTP", disabled=not test_confirm):
