@@ -126,16 +126,24 @@ def build_finance_email_body(
     return "\n".join(lines)
 
 
+def suggested_customer_email(row: sqlite3.Row, clients: list[dict[str, Any]] | None = None) -> str:
+    for client in clients or []:
+        if isinstance(client, dict) and txt(client.get("email")):
+            return txt(client.get("email"))
+    return txt(row["sender_email"])
+
+
 def send_direct_reply(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
+    to_email: str,
     subject: str,
     body: str,
     log_source: str,
 ) -> None:
-    send_email_smtp(txt(row["sender_email"]), subject, body, txt(row["message_id"]))
+    send_email_smtp(to_email, subject, body, txt(row["message_id"]))
     update_email_status(row["id"], "resolvido", conn)
-    log_event("INFO", log_source, f"E-mail {row['id']} enviado para {txt(row['sender_email'])} e marcado como resolvido.", conn)
+    log_event("INFO", log_source, f"E-mail {row['id']} enviado para {to_email} e marcado como resolvido.", conn)
 
 
 def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
@@ -477,6 +485,11 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         invoices = st.session_state.get(f"fin_invoices_data_{row['id']}") or []
         if receivables or invoices:
             st.markdown("**Montar e-mail com nota/boleto**")
+            auto_to_email = st.text_input(
+                "Enviar para",
+                value=suggested_customer_email(row, st.session_state.get(clients_key) or []),
+                key=f"fin_auto_to_{row['id']}",
+            )
             receipt_options = ["Não incluir boleto/recebimento"] + [
                 finance_option_label(item, "recebimento") for item in receivables if isinstance(item, dict)
             ]
@@ -518,19 +531,19 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
             d1, d2 = st.columns(2)
             if d1.button(
                 "Criar rascunho com nota/boleto",
-                disabled=(not approve_auto or not (receivable or invoice)),
+                disabled=(not approve_auto or not auto_to_email or not (receivable or invoice)),
                 key=f"fin_auto_draft_{row['id']}",
             ):
-                save_generated_response(conn, row["id"], txt(row["sender_email"]), f"Re: {txt(row['subject'])}", auto_body)
-                log_event("INFO", "rascunho_financeiro_auto", f"E-mail {row['id']} com nota/boleto selecionados.", conn)
+                save_generated_response(conn, row["id"], auto_to_email, f"Re: {txt(row['subject'])}", auto_body)
+                log_event("INFO", "rascunho_financeiro_auto", f"E-mail {row['id']} com nota/boleto para {auto_to_email}.", conn)
                 st.success("Rascunho criado em Respostas Geradas. Revise e confirme o envio.")
             if d2.button(
                 "Enviar agora e marcar resolvido",
-                disabled=(not approve_auto or not (receivable or invoice)),
+                disabled=(not approve_auto or not auto_to_email or not (receivable or invoice)),
                 key=f"fin_auto_send_{row['id']}",
             ):
                 try:
-                    send_direct_reply(conn, row, f"Re: {txt(row['subject'])}", auto_body, "envio_financeiro_direto")
+                    send_direct_reply(conn, row, auto_to_email, f"Re: {txt(row['subject'])}", auto_body, "envio_financeiro_direto")
                     st.success("E-mail enviado e marcado como resolvido.")
                     st.rerun()
                 except Exception as exc:
@@ -538,6 +551,11 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                     st.error(f"Erro ao enviar: {exc}")
 
         st.warning("Envio de nota, boleto ou resposta ao cliente deve ser feito somente após aprovação manual.")
+        manual_to_email = st.text_input(
+            "Enviar resposta manual para",
+            value=suggested_customer_email(row, st.session_state.get(clients_key) or []),
+            key=f"fin_manual_to_{row['id']}",
+        )
         draft = st.text_area(
             "Texto para resposta após conferência",
             value="Olá, conferimos sua solicitação no financeiro/fiscal e seguiremos com o envio após aprovação interna.",
@@ -545,12 +563,12 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         )
         approved = st.checkbox("Aprovo gerar rascunho desta resposta financeira", key=f"fin_approve_{row['id']}")
         if st.button("Gerar rascunho aprovado", disabled=not approved, key=f"fin_create_draft_{row['id']}"):
-            save_generated_response(conn, row["id"], txt(row["sender_email"]), f"Re: {txt(row['subject'])}", draft)
-            log_event("INFO", "rascunho_financeiro_aprovado", f"E-mail {row['id']}", conn)
+            save_generated_response(conn, row["id"], manual_to_email, f"Re: {txt(row['subject'])}", draft)
+            log_event("INFO", "rascunho_financeiro_aprovado", f"E-mail {row['id']} para {manual_to_email}", conn)
             st.success("Rascunho financeiro gerado. O envio ainda exige confirmação na aba Respostas Geradas.")
-        if st.button("Enviar resposta financeira agora e marcar resolvido", disabled=not approved, key=f"fin_send_direct_{row['id']}"):
+        if st.button("Enviar resposta financeira agora e marcar resolvido", disabled=(not approved or not manual_to_email), key=f"fin_send_direct_{row['id']}"):
             try:
-                send_direct_reply(conn, row, f"Re: {txt(row['subject'])}", draft, "envio_financeiro_manual")
+                send_direct_reply(conn, row, manual_to_email, f"Re: {txt(row['subject'])}", draft, "envio_financeiro_manual")
                 st.success("E-mail enviado e marcado como resolvido.")
                 st.rerun()
             except Exception as exc:
@@ -609,6 +627,7 @@ def responses_tab() -> None:
         with st.container(border=True):
             st.markdown(f"### {txt(r['subject'])}")
             st.caption(f"Para: {txt(r['to_email'])} | Status: {txt(r['status'])} | Categoria: {txt(r['category'])}")
+            to_email = st.text_input("Para", txt(r["to_email"]), key=f"resp_to_{r['id']}")
             subject = st.text_input("Assunto", txt(r["subject"]), key=f"resp_subject_{r['id']}")
             body = st.text_area("Resposta", txt(r["body"]), height=260, key=f"resp_body_{r['id']}")
             uploaded_files = st.file_uploader(
@@ -618,13 +637,13 @@ def responses_tab() -> None:
             )
             c1, c2 = st.columns(2)
             if c1.button("Salvar edição", key=f"resp_save_{r['id']}"):
-                update_response(conn, r["id"], subject, body)
+                update_response(conn, r["id"], subject, body, to_email)
                 st.success("Rascunho atualizado.")
             st.code(body, language="text")
             confirm = st.checkbox("Tem certeza que deseja enviar este e-mail?", key=f"confirm_{r['id']}")
             if c2.button("Enviar resposta", key=f"send_{r['id']}", disabled=(not confirm or r["status"] == "enviado")):
                 try:
-                    update_response(conn, r["id"], subject, body)
+                    update_response(conn, r["id"], subject, body, to_email)
                     original = conn.execute("SELECT message_id FROM emails WHERE id=?", (r["email_id"],)).fetchone()
                     attachments = [
                         {
@@ -635,14 +654,14 @@ def responses_tab() -> None:
                         for file in uploaded_files
                     ]
                     send_email_smtp(
-                        txt(r["to_email"]),
+                        to_email,
                         subject,
                         body,
                         original["message_id"] if original else None,
                         attachments=attachments,
                     )
                     mark_response_sent(conn, r["id"])
-                    log_event("INFO", "envio_email", f"Resposta {r['id']} enviada com {len(attachments)} anexo(s).", conn)
+                    log_event("INFO", "envio_email", f"Resposta {r['id']} enviada para {to_email} com {len(attachments)} anexo(s).", conn)
                     st.success("E-mail enviado com confirmação manual.")
                 except Exception as exc:
                     log_event("ERROR", "envio_email", str(exc), conn)

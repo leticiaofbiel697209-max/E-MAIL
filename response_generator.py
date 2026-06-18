@@ -108,7 +108,14 @@ def save_generated_response(conn: sqlite3.Connection, email_id: int, to_email: s
     return response_id
 
 
-def update_response(conn: sqlite3.Connection, response_id: int, subject: str, body: str) -> None:
+def update_response(conn: sqlite3.Connection, response_id: int, subject: str, body: str, to_email: str | None = None) -> None:
+    if to_email is not None:
+        conn.execute(
+            "UPDATE respostas_geradas SET to_email=?, subject=?, body=?, updated_at=? WHERE id=?",
+            (to_email, subject, body, now_iso(), response_id),
+        )
+        conn.commit()
+        return
     conn.execute(
         "UPDATE respostas_geradas SET subject=?, body=?, updated_at=? WHERE id=?",
         (subject, body, now_iso(), response_id),
