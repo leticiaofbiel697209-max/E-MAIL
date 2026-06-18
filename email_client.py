@@ -89,7 +89,7 @@ class EmailClient:
             ordered_uids = sorted(uids, key=lambda item: int(item))[-limit:]
             emails = []
             for uid in reversed(ordered_uids):
-                status, msg_data = mail.uid("fetch", uid, "(RFC822 FLAGS)")
+                status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[] FLAGS)")
                 if status != "OK" or not msg_data:
                     continue
                 raw = None

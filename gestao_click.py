@@ -68,6 +68,29 @@ class GestaoClickClient:
             raise GestaoClickError(json.dumps(result, ensure_ascii=False)[:1200])
         return result
 
+    def list_all_pages(self, path: str, params: dict[str, Any], max_pages: int = 10) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        seen_pages: set[int] = set()
+        page = int(params.get("pagina") or 1)
+        while page not in seen_pages and len(seen_pages) < max_pages:
+            seen_pages.add(page)
+            page_params = dict(params)
+            page_params["pagina"] = page
+            result = self.request("GET", path, params=page_params)
+            data = result.get("data") or []
+            if isinstance(data, list):
+                items.extend(item for item in data if isinstance(item, dict))
+            meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+            next_page = meta.get("proxima_pagina")
+            total_pages = int(meta.get("total_paginas") or page)
+            if next_page:
+                page = int(next_page)
+            elif page < total_pages:
+                page += 1
+            else:
+                break
+        return items
+
     def list_stores(self) -> list[dict[str, Any]]:
         result = self.request("GET", "/lojas")
         return result.get("data") or []
@@ -100,8 +123,7 @@ class GestaoClickClient:
 
     def list_receivables(self, cliente_id: str | int, limit: int = 100) -> list[dict[str, Any]]:
         params = self._store_params({"cliente_id": cliente_id, "limit": limit})
-        result = self.request("GET", "/recebimentos", params=params)
-        items = result.get("data") or []
+        items = self.list_all_pages("/recebimentos", params)
         enriched = []
         for item in items:
             if not isinstance(item, dict):
@@ -153,8 +175,12 @@ class GestaoClickClient:
         seen: set[str] = set()
         merged: list[dict[str, Any]] = []
         for params in attempts:
-            result = self.request("GET", "/notas_fiscais_produtos", params=self._store_params(params))
-            data = filter_invoices_for_client(result.get("data") or [], cliente_id, cnpj, numero_nf)
+            data = filter_invoices_for_client(
+                self.list_all_pages("/notas_fiscais_produtos", self._store_params(params)),
+                cliente_id,
+                cnpj,
+                numero_nf,
+            )
             if data:
                 for item in data:
                     item_id = item.get("id") if isinstance(item, dict) else None

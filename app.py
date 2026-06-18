@@ -58,6 +58,23 @@ def find_finance_link(item: Any) -> str:
     return ""
 
 
+def find_nested_value(item: Any, keys: tuple[str, ...]) -> str:
+    if isinstance(item, dict):
+        for key, value in item.items():
+            if str(key).lower() in keys and txt(value):
+                return txt(value)
+        for value in item.values():
+            nested = find_nested_value(value, keys)
+            if nested:
+                return nested
+    elif isinstance(item, list):
+        for value in item:
+            nested = find_nested_value(value, keys)
+            if nested:
+                return nested
+    return ""
+
+
 def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
     if not template or not item:
         return ""
@@ -69,8 +86,11 @@ def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
         "numero": txt(item.get("numero_nf") or item.get("numero_nfe") or item.get("numero") or item.get("codigo") or item.get("id")),
         "chave": txt(item.get("chave") or item.get("chave_nfe") or item.get("chave_acesso")),
         "cliente_id": txt(item.get("cliente_id") or item.get("destinatario_id")),
-        "hash": txt(item.get("hash") or item.get("codigo_hash") or item.get("hash_publico") or item.get("token")),
+        "hash": find_nested_value(item, ("hash", "codigo_hash", "hash_publico", "token")),
     }
+    for key, value in values.items():
+        if "{" + key + "}" in template and not value:
+            return ""
     try:
         return template.format(**values)
     except Exception:
@@ -158,8 +178,8 @@ def send_direct_reply(
     log_source: str,
 ) -> None:
     send_email_smtp(to_email, subject, body, txt(row["message_id"]))
-    update_email_status(row["id"], "resolvido", conn)
-    log_event("INFO", log_source, f"E-mail {row['id']} enviado para {to_email} e marcado como resolvido.", conn)
+    update_email_status(row["id"], "arquivado", conn)
+    log_event("INFO", log_source, f"E-mail {row['id']} enviado para {to_email} e arquivado.", conn)
 
 
 def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
@@ -191,6 +211,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "vencimento": txt(item.get("data_vencimento")),
                     "status": txt(item.get("liquidado")),
                     "forma": txt(item.get("nome_forma_pagamento")),
+                    "hash": find_nested_value(item, ("hash", "codigo_hash", "hash_publico", "token")),
                     "link": best_finance_link(item, "GESTAOCLICK_BOLETO_LINK_TEMPLATE"),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
@@ -204,6 +225,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "valor": txt(item.get("valor_total_nf") or item.get("valor_produtos")),
                     "emissao": txt(item.get("data_emissao")),
                     "situacao": txt(item.get("situacao_nf")),
+                    "hash": find_nested_value(item, ("hash", "codigo_hash", "hash_publico", "token")),
                     "link": best_finance_link(item, "GESTAOCLICK_NOTA_LINK_TEMPLATE"),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
@@ -325,6 +347,10 @@ def email_card(conn: sqlite3.Connection, row: sqlite3.Row, key_prefix: str, inte
             st.success("Observação salva.")
         if c2.button("Marcar como resolvido", key=f"resolved_{key_prefix}_{row['id']}"):
             update_email_status(row["id"], "resolvido", conn)
+            st.cache_data.clear()
+            st.rerun()
+        if c2.button("Arquivar/remover da operação", key=f"archive_{key_prefix}_{row['id']}"):
+            update_email_status(row["id"], "arquivado", conn)
             st.cache_data.clear()
             st.rerun()
         if c3.button("Gerar resposta", key=f"gen_{key_prefix}_{row['id']}"):
@@ -456,6 +482,7 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         cnpj_detectado = first_value(detected.get("cnpj"))
         manual_cnpj = st.text_input("CNPJ do cliente", value=cnpj_detectado, key=f"fin_cnpj_{row['id']}")
         numero_nf = st.text_input("Número da nota fiscal, se souber", key=f"fin_numero_nf_{row['id']}")
+        show_all_docs = st.checkbox("Mostrar todas as notas/boletos deste cliente/CNPJ", value=True, key=f"fin_show_all_docs_{row['id']}")
         c1, c2, c3 = st.columns(3)
         if c1.button("Buscar cliente", key=f"fin_find_client_{row['id']}"):
             try:
@@ -481,7 +508,11 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         if c3.button("Consultar notas fiscais", key=f"fin_invoices_{row['id']}"):
             try:
                 client_ids = selected_client_ids(cliente_id, st.session_state.get(clients_key) or [])
-                notas = gc.list_product_invoices_for_clients(client_ids, cnpj=manual_cnpj, numero_nf=numero_nf)
+                notas = gc.list_product_invoices_for_clients(
+                    client_ids,
+                    cnpj=manual_cnpj,
+                    numero_nf="" if show_all_docs else numero_nf,
+                )
                 st.session_state[f"fin_invoices_data_{row['id']}"] = notas
                 if not notas:
                     st.warning("Nenhuma nota correspondente a este Cliente ID/CNPJ foi encontrada.")
@@ -556,13 +587,13 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 log_event("INFO", "rascunho_financeiro_auto", f"E-mail {row['id']} com nota/boleto para {auto_to_email}.", conn)
                 st.success("Rascunho criado em Respostas Geradas. Revise e confirme o envio.")
             if d2.button(
-                "Enviar agora e marcar resolvido",
+                "Enviar agora e arquivar",
                 disabled=(not approve_auto or not auto_to_email or not (receivable or invoice)),
                 key=f"fin_auto_send_{row['id']}",
             ):
                 try:
                     send_direct_reply(conn, row, auto_to_email, f"Re: {txt(row['subject'])}", auto_body, "envio_financeiro_direto")
-                    st.success("E-mail enviado e marcado como resolvido.")
+                    st.success("E-mail enviado e arquivado.")
                     st.rerun()
                 except Exception as exc:
                     log_event("ERROR", "envio_financeiro_direto", str(exc), conn)
@@ -584,10 +615,10 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
             save_generated_response(conn, row["id"], manual_to_email, f"Re: {txt(row['subject'])}", draft)
             log_event("INFO", "rascunho_financeiro_aprovado", f"E-mail {row['id']} para {manual_to_email}", conn)
             st.success("Rascunho financeiro gerado. O envio ainda exige confirmação na aba Respostas Geradas.")
-        if st.button("Enviar resposta financeira agora e marcar resolvido", disabled=(not approved or not manual_to_email), key=f"fin_send_direct_{row['id']}"):
+        if st.button("Enviar resposta financeira agora e arquivar", disabled=(not approved or not manual_to_email), key=f"fin_send_direct_{row['id']}"):
             try:
                 send_direct_reply(conn, row, manual_to_email, f"Re: {txt(row['subject'])}", draft, "envio_financeiro_manual")
-                st.success("E-mail enviado e marcado como resolvido.")
+                st.success("E-mail enviado e arquivado.")
                 st.rerun()
             except Exception as exc:
                 log_event("ERROR", "envio_financeiro_manual", str(exc), conn)
@@ -608,7 +639,7 @@ def inbox_tab(default_filter: str | None = None, group: str | None = None, integ
     default_idx = category_options.index(default_filter) if default_filter in category_options else 0
     category = c2.selectbox("Categoria", category_options, index=default_idx, key=f"category_{key_prefix}")
     urgency = c3.selectbox("Urgência", ["Todas", 1, 2, 3, 4, 5], key=f"urgency_{key_prefix}")
-    status = c4.selectbox("Status", ["novo", "Todos", "resolvido"], key=f"status_{key_prefix}")
+    status = c4.selectbox("Status", ["novo", "Todos", "resolvido", "arquivado"], key=f"status_{key_prefix}")
     sender = c5.text_input("Remetente", key=f"sender_{key_prefix}")
     sort_label = c6.selectbox("Ordem", ["Mais novo primeiro", "Mais antigo primeiro", "Urgência primeiro"], key=f"sort_{key_prefix}")
     sort = {"Mais novo primeiro": "newest", "Mais antigo primeiro": "oldest", "Urgência primeiro": "urgent"}[sort_label]

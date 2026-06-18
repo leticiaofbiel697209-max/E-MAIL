@@ -214,7 +214,9 @@ def list_emails(filters: dict[str, Any] | None = None, conn: sqlite3.Connection 
     if filters.get("sender"):
         clauses.append("(sender_email LIKE ? OR sender_name LIKE ?)")
         params.extend([f"%{filters['sender']}%", f"%{filters['sender']}%"])
-    if filters.get("status") and filters["status"] != "Todos":
+    if filters.get("status") and filters["status"] == "Todos":
+        clauses.append("status!='arquivado'")
+    elif filters.get("status"):
         clauses.append("status=?")
         params.append(filters["status"])
     if filters.get("date_start"):

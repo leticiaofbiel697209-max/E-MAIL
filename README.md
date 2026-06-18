@@ -7,6 +7,7 @@ MVP em Python + Streamlit para rastrear e organizar e-mails da Novaprint usando 
 - Textos em português que estavam corrompidos por codificação.
 - Criação do arquivo `.env.example`.
 - Busca IMAP mais compatível: procura e-mails não lidos e e-mails dos últimos 7 dias separadamente.
+- Leitura IMAP com `BODY.PEEK[]`, para não marcar mensagens como lidas no servidor/Thunderbird.
 - Interface sem `st.badge`, para funcionar melhor em versões diferentes do Streamlit.
 - Remoção da dependência obrigatória de `pandas`.
 - Fallback quando `OPENAI_API_KEY` não está configurada.
@@ -97,6 +98,8 @@ Use sempre o `GESTAOCLICK_DEFAULT_LOJA_ID` da **Novaprint**. Sem ele, o Gestão 
 Se a API do Gestão Click não retornar link público da nota ou boleto, configure os templates de link. Placeholders disponíveis: `{hash}`, `{id}`, `{codigo}`, `{numero}`, `{chave}` e `{cliente_id}`.
 
 Não use link fixo, por exemplo `https://gestaoclick.com/boleto/azaojQQ`, porque ele será sempre o mesmo para todos os clientes. Para o Gestão Click, normalmente o correto é usar `{hash}`: `https://gestaoclick.com/boleto/{hash}` e `https://gestaoclick.com/nfe/danfe/{hash}`.
+
+Se o retorno da API não trouxer `hash`, o app deixa o link em branco em vez de gerar URL quebrada.
 
 Para SMTP na porta `587`, use `EMAIL_SMTP_USE_SSL = "false"` porque o app usa STARTTLS. Para porta `465`, use `EMAIL_SMTP_USE_SSL = "true"`.
 
