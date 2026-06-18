@@ -6,7 +6,7 @@ import smtplib
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from email.message import EmailMessage
-from email.utils import parsedate_to_datetime
+from email.utils import formataddr, parsedate_to_datetime
 from typing import Any
 
 from utils import clean_text, decode_mime_words, env, extract_sender, html_to_text, safe_decode
@@ -194,15 +194,20 @@ def send_email_smtp(
     body: str,
     reply_to_message_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    use_reply_headers: bool = False,
 ) -> None:
     host, port, user, password, use_ssl = _smtp_config()
     msg = EmailMessage()
-    msg["From"] = user
+    from_name = env("EMAIL_FROM_NAME", "Novaprint")
+    msg["From"] = formataddr((from_name, user))
     msg["To"] = to_email
     msg["Subject"] = subject
-    if reply_to_message_id:
-        msg["In-Reply-To"] = reply_to_message_id
-        msg["References"] = reply_to_message_id
+    if reply_to_message_id and use_reply_headers:
+        clean_message_id = str(reply_to_message_id).strip().strip("<>")
+        if clean_message_id:
+            formatted_message_id = f"<{clean_message_id}>"
+            msg["In-Reply-To"] = formatted_message_id
+            msg["References"] = formatted_message_id
     msg.set_content(body)
     for attachment in attachments or []:
         filename = str(attachment.get("filename") or "anexo")

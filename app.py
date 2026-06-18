@@ -701,6 +701,7 @@ def config_tab() -> None:
         {"Variável": "EMAIL_SMTP_ALT_HOSTS", "Status/valor": env("EMAIL_SMTP_ALT_HOSTS", "não configurado")},
         {"Variável": "EMAIL_USER", "Status/valor": env("EMAIL_USER", "não configurado")},
         {"Variável": "EMAIL_PASSWORD", "Status/valor": "configurado" if env("EMAIL_PASSWORD") else "não configurado"},
+        {"Variável": "EMAIL_FROM_NAME", "Status/valor": env("EMAIL_FROM_NAME", "Novaprint")},
         {"Variável": "OPENAI_API_KEY", "Status/valor": "configurado" if env("OPENAI_API_KEY") else "não configurado - usando fallback por regras"},
         {"Variável": "GESTAOCLICK_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_ACCESS_TOKEN") else "não configurado"},
         {"Variável": "GESTAOCLICK_SECRET_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_SECRET_ACCESS_TOKEN") else "não configurado"},
@@ -733,6 +734,21 @@ def config_tab() -> None:
         except Exception as exc:
             log_event("ERROR", "teste_smtp", str(exc), conn)
             st.error(f"Erro no teste SMTP: {exc}")
+        finally:
+            conn.close()
+    if st.button("Enviar teste como resposta", disabled=not test_confirm):
+        conn = get_conn()
+        try:
+            send_email_smtp(
+                test_to,
+                "Re: Teste de resposta - Central de E-mails Novaprint",
+                "Este teste usa o mesmo formato das respostas do sistema, sem cabeçalhos de conversa.",
+            )
+            log_event("INFO", "teste_smtp_resposta", f"Teste de resposta enviado para {test_to}", conn)
+            st.success("Teste como resposta enviado. Confira caixa de entrada e spam.")
+        except Exception as exc:
+            log_event("ERROR", "teste_smtp_resposta", str(exc), conn)
+            st.error(f"Erro no teste como resposta: {exc}")
         finally:
             conn.close()
     st.divider()
