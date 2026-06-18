@@ -33,12 +33,31 @@ def _smtp_config() -> tuple[str, int, str, str, bool]:
     return host, port, user, password, use_ssl or port == 465
 
 
-def _smtp_candidates(host: str, port: int, use_ssl: bool) -> list[tuple[str, int, bool]]:
-    candidates = [(host, port, use_ssl)]
-    for fallback_port, fallback_ssl in ((465, True), (587, False)):
-        candidate = (host, fallback_port, fallback_ssl)
-        if candidate not in candidates:
-            candidates.append(candidate)
+def _smtp_host_candidates(host: str, user: str) -> list[str]:
+    hosts = [host]
+    domain = user.split("@", 1)[1] if "@" in user else ""
+    if host.startswith("mail."):
+        hosts.append("smtp." + host.removeprefix("mail."))
+    if host.startswith("smtp."):
+        hosts.append("mail." + host.removeprefix("smtp."))
+    if domain:
+        hosts.extend([f"smtp.{domain}", f"mail.{domain}"])
+    extra_hosts = [item.strip() for item in (env("EMAIL_SMTP_ALT_HOSTS", "") or "").split(",") if item.strip()]
+    hosts.extend(extra_hosts)
+    deduped = []
+    for item in hosts:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _smtp_candidates(host: str, port: int, use_ssl: bool, user: str = "") -> list[tuple[str, int, bool]]:
+    candidates = []
+    for candidate_host in _smtp_host_candidates(host, user):
+        for candidate_port, candidate_ssl in ((port, use_ssl), (465, True), (587, False)):
+            candidate = (candidate_host, candidate_port, candidate_ssl)
+            if candidate not in candidates:
+                candidates.append(candidate)
     return candidates
 
 
@@ -195,7 +214,7 @@ def send_email_smtp(
         msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
 
     connection_errors = []
-    for candidate_host, candidate_port, candidate_ssl in _smtp_candidates(host, port, use_ssl):
+    for candidate_host, candidate_port, candidate_ssl in _smtp_candidates(host, port, use_ssl, user):
         smtp_cls = smtplib.SMTP_SSL if candidate_ssl else smtplib.SMTP
         mode = "SSL" if candidate_ssl else "STARTTLS"
         try:

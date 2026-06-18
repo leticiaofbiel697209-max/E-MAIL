@@ -102,6 +102,7 @@ Exemplo para servidor com porta 465:
 EMAIL_SMTP_HOST = "mail.novaprintbrasil.com.br"
 EMAIL_SMTP_PORT = "465"
 EMAIL_SMTP_USE_SSL = "true"
+EMAIL_SMTP_ALT_HOSTS = "smtp.novaprintbrasil.com.br"
 ```
 
 Na aba **Configurações**, use **Enviar teste SMTP** antes de enviar para cliente. Se o teste não chegar, confira spam/lixo eletrônico, senha de aplicativo e liberação de SMTP no provedor.

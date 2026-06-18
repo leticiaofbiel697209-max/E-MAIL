@@ -679,6 +679,7 @@ def config_tab() -> None:
         {"Variável": "EMAIL_SMTP_HOST", "Status/valor": env("EMAIL_SMTP_HOST", "não configurado")},
         {"Variável": "EMAIL_SMTP_PORT", "Status/valor": env("EMAIL_SMTP_PORT", "587")},
         {"Variável": "EMAIL_SMTP_USE_SSL", "Status/valor": env("EMAIL_SMTP_USE_SSL", "false")},
+        {"Variável": "EMAIL_SMTP_ALT_HOSTS", "Status/valor": env("EMAIL_SMTP_ALT_HOSTS", "não configurado")},
         {"Variável": "EMAIL_USER", "Status/valor": env("EMAIL_USER", "não configurado")},
         {"Variável": "EMAIL_PASSWORD", "Status/valor": "configurado" if env("EMAIL_PASSWORD") else "não configurado"},
         {"Variável": "OPENAI_API_KEY", "Status/valor": "configurado" if env("OPENAI_API_KEY") else "não configurado - usando fallback por regras"},
@@ -697,7 +698,7 @@ def config_tab() -> None:
         st.warning("Para porta 587, normalmente use EMAIL_SMTP_USE_SSL=false. O app usa STARTTLS nessa porta.")
     if smtp_port == "465" and smtp_ssl not in ("1", "true", "sim", "yes"):
         st.warning("Para porta 465, normalmente use EMAIL_SMTP_USE_SSL=true.")
-    st.caption("Se a porta configurada recusar conexão, o app também tenta 465/SSL e 587/STARTTLS automaticamente.")
+    st.caption("Se o SMTP configurado falhar, o app também tenta mail./smtp. do domínio, 465/SSL e 587/STARTTLS automaticamente.")
     test_to = st.text_input("Enviar teste para", value=env("EMAIL_USER", ""), key="smtp_test_to")
     test_confirm = st.checkbox("Confirmo enviar um e-mail de teste", key="smtp_test_confirm")
     if st.button("Enviar teste SMTP", disabled=not test_confirm):
