@@ -39,6 +39,73 @@ def txt(value: Any) -> str:
     return repair_mojibake("" if value is None else str(value))
 
 
+def find_finance_link(item: Any) -> str:
+    if isinstance(item, dict):
+        for key, value in item.items():
+            key_name = str(key).lower()
+            if any(term in key_name for term in ("link", "url", "pdf", "danfe", "boleto", "xml")):
+                value_text = txt(value)
+                if value_text.startswith(("http://", "https://")):
+                    return value_text
+            nested = find_finance_link(value)
+            if nested:
+                return nested
+    elif isinstance(item, list):
+        for value in item:
+            nested = find_finance_link(value)
+            if nested:
+                return nested
+    return ""
+
+
+def finance_option_label(item: dict[str, Any], kind: str) -> str:
+    if kind == "recebimento":
+        code = txt(item.get("codigo") or item.get("id"))
+        value = txt(item.get("valor_total") or item.get("valor"))
+        due = txt(item.get("data_vencimento"))
+        return f"{code} | R$ {value or '-'} | venc. {due or '-'}"
+    number = txt(item.get("numero_nf") or item.get("numero_nfe") or item.get("numero") or item.get("id"))
+    value = txt(item.get("valor_total_nf") or item.get("valor_produtos") or item.get("valor"))
+    date_value = txt(item.get("data_emissao") or item.get("data"))
+    return f"NF {number} | R$ {value or '-'} | emissão {date_value or '-'}"
+
+
+def build_finance_email_body(
+    sender_name: str,
+    receivable: dict[str, Any] | None,
+    invoice: dict[str, Any] | None,
+) -> str:
+    lines = [
+        f"Olá, {sender_name or 'tudo bem'}!",
+        "",
+        "Segue abaixo a documentação solicitada:",
+        "",
+    ]
+    if invoice:
+        invoice_number = txt(invoice.get("numero_nf") or invoice.get("numero_nfe") or invoice.get("numero") or invoice.get("id"))
+        invoice_value = txt(invoice.get("valor_total_nf") or invoice.get("valor_produtos") or invoice.get("valor"))
+        invoice_link = find_finance_link(invoice)
+        lines.append(f"Nota fiscal: {invoice_number or 'sem número informado'}")
+        if invoice_value:
+            lines.append(f"Valor da nota: R$ {invoice_value}")
+        lines.append(f"Link da nota: {invoice_link}" if invoice_link else "Link da nota: o Gestão Click não retornou link nesta consulta; anexe o PDF/XML antes do envio.")
+        lines.append("")
+    if receivable:
+        receivable_code = txt(receivable.get("codigo") or receivable.get("id"))
+        receivable_value = txt(receivable.get("valor_total") or receivable.get("valor"))
+        receivable_due = txt(receivable.get("data_vencimento"))
+        receivable_link = find_finance_link(receivable)
+        lines.append(f"Boleto/recebimento: {receivable_code or 'sem código informado'}")
+        if receivable_value:
+            lines.append(f"Valor: R$ {receivable_value}")
+        if receivable_due:
+            lines.append(f"Vencimento: {receivable_due}")
+        lines.append(f"Link do boleto: {receivable_link}" if receivable_link else "Link do boleto: o Gestão Click não retornou link nesta consulta; anexe o boleto antes do envio.")
+        lines.append("")
+    lines.extend(["Qualquer dúvida, fico à disposição.", "", "Atenciosamente,", "Equipe Novaprint"])
+    return "\n".join(lines)
+
+
 def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
     if isinstance(data, dict):
         data = data.get("data") or [data]
@@ -68,6 +135,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "vencimento": txt(item.get("data_vencimento")),
                     "status": txt(item.get("liquidado")),
                     "forma": txt(item.get("nome_forma_pagamento")),
+                    "link": find_finance_link(item),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -80,7 +148,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "valor": txt(item.get("valor_total_nf") or item.get("valor_produtos")),
                     "emissao": txt(item.get("data_emissao")),
                     "situacao": txt(item.get("situacao_nf")),
-                    "link": txt(item.get("url") or item.get("link") or item.get("link_pdf") or item.get("danfe")),
+                    "link": find_finance_link(item),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -372,6 +440,34 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 st.markdown(f"**{label}**")
                 kind = "clientes" if "Clientes" in label else "recebimentos" if "Recebimentos" in label else "notas"
                 st.dataframe(safe_table_rows(data, kind), use_container_width=True, hide_index=True)
+
+        receivables = st.session_state.get(f"fin_receivables_data_{row['id']}") or []
+        invoices = st.session_state.get(f"fin_invoices_data_{row['id']}") or []
+        if receivables or invoices:
+            st.markdown("**Montar e-mail com nota/boleto**")
+            receipt_options = ["Não incluir boleto/recebimento"] + [
+                finance_option_label(item, "recebimento") for item in receivables if isinstance(item, dict)
+            ]
+            invoice_options = ["Não incluir nota fiscal"] + [
+                finance_option_label(item, "nota") for item in invoices if isinstance(item, dict)
+            ]
+            selected_receipt = st.selectbox("Boleto/recebimento para enviar", receipt_options, key=f"fin_select_receipt_{row['id']}")
+            selected_invoice = st.selectbox("Nota fiscal para enviar", invoice_options, key=f"fin_select_invoice_{row['id']}")
+            receipt_index = receipt_options.index(selected_receipt) - 1
+            invoice_index = invoice_options.index(selected_invoice) - 1
+            receivable = receivables[receipt_index] if receipt_index >= 0 and receipt_index < len(receivables) else None
+            invoice = invoices[invoice_index] if invoice_index >= 0 and invoice_index < len(invoices) else None
+            auto_body = build_finance_email_body(txt(row["sender_name"]) or txt(row["sender_email"]), receivable, invoice)
+            st.text_area("Prévia do e-mail financeiro", auto_body, height=220, key=f"fin_auto_preview_{row['id']}")
+            approve_auto = st.checkbox("Aprovo criar rascunho com estes itens", key=f"fin_auto_approve_{row['id']}")
+            if st.button(
+                "Criar e-mail com nota/boleto",
+                disabled=(not approve_auto or not (receivable or invoice)),
+                key=f"fin_auto_draft_{row['id']}",
+            ):
+                save_generated_response(conn, row["id"], txt(row["sender_email"]), f"Re: {txt(row['subject'])}", auto_body)
+                log_event("INFO", "rascunho_financeiro_auto", f"E-mail {row['id']} com nota/boleto selecionados.", conn)
+                st.success("Rascunho criado em Respostas Geradas. Revise e confirme o envio.")
 
         st.warning("Envio de nota, boleto ou resposta ao cliente deve ser feito somente após aprovação manual.")
         draft = st.text_area(
