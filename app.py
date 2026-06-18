@@ -33,6 +33,8 @@ from utils import CATEGORIES, env, extract_requested_items, find_entities, remov
 st.set_page_config(page_title="Central de E-mails Novaprint", page_icon="Email", layout="wide")
 
 FINANCE_CATEGORIES = {"Financeiro", "Pedido de boleto", "Pedido de nota fiscal", "Comprovante enviado"}
+DEFAULT_NOTA_LINK_TEMPLATE = "https://gestaoclick.com/nfe/danfe/{hash}"
+DEFAULT_BOLETO_LINK_TEMPLATE = "https://gestaoclick.com/boleto/{hash}"
 
 
 def txt(value: Any) -> str:
@@ -98,7 +100,22 @@ def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
 
 
 def best_finance_link(item: dict[str, Any] | None, template_env: str) -> str:
-    return find_finance_link(item) or apply_link_template(env(template_env, ""), item)
+    default_template = DEFAULT_NOTA_LINK_TEMPLATE if "NOTA" in template_env else DEFAULT_BOLETO_LINK_TEMPLATE
+    return find_finance_link(item) or apply_link_template(env(template_env, default_template) or default_template, item)
+
+
+def finance_link_missing_reason(item: dict[str, Any] | None, template_env: str) -> str:
+    if not item:
+        return ""
+    if find_finance_link(item):
+        return ""
+    default_template = DEFAULT_NOTA_LINK_TEMPLATE if "NOTA" in template_env else DEFAULT_BOLETO_LINK_TEMPLATE
+    template = env(template_env, default_template) or default_template
+    if "{hash}" in template and not find_nested_value(item, ("hash", "codigo_hash", "hash_publico", "token")):
+        return "A API do Gestão Click não retornou o campo hash deste documento."
+    if not apply_link_template(template, item):
+        return "O template de link não pôde ser aplicado aos dados retornados pela API."
+    return ""
 
 
 def finance_option_label(item: dict[str, Any], kind: str) -> str:
@@ -131,7 +148,12 @@ def build_finance_email_body(
         lines.append(f"Nota fiscal: {invoice_number or 'sem número informado'}")
         if invoice_value:
             lines.append(f"Valor da nota: R$ {invoice_value}")
-        lines.append(f"Link da nota: {invoice_link}" if invoice_link else "Link da nota: o Gestão Click não retornou link nesta consulta; anexe o PDF/XML antes do envio.")
+        if invoice_link:
+            lines.append(f"Link da nota: {invoice_link}")
+        elif invoice.get("_pdf_attachment"):
+            lines.append("Nota fiscal: PDF anexado neste e-mail.")
+        else:
+            lines.append("Link da nota: o Gestão Click não retornou link/PDF nesta consulta.")
         lines.append("")
     if receivable:
         receivable_code = txt(receivable.get("codigo") or receivable.get("id"))
@@ -143,7 +165,12 @@ def build_finance_email_body(
             lines.append(f"Valor: R$ {receivable_value}")
         if receivable_due:
             lines.append(f"Vencimento: {receivable_due}")
-        lines.append(f"Link do boleto: {receivable_link}" if receivable_link else "Link do boleto: o Gestão Click não retornou link nesta consulta; anexe o boleto antes do envio.")
+        if receivable_link:
+            lines.append(f"Link do boleto: {receivable_link}")
+        elif receivable.get("_pdf_attachment"):
+            lines.append("Boleto: PDF anexado neste e-mail.")
+        else:
+            lines.append("Link do boleto: o Gestão Click não retornou link/PDF nesta consulta.")
         lines.append("")
     lines.extend(["Qualquer dúvida, fico à disposição.", "", "Atenciosamente,", "Equipe Novaprint"])
     return "\n".join(lines)
@@ -169,6 +196,21 @@ def selected_client_ids(primary_id: str, clients: list[dict[str, Any]] | None = 
     return ids
 
 
+def finance_pdf_attachments(*items: dict[str, Any] | None) -> list[dict[str, Any]]:
+    attachments = []
+    for item in items:
+        if not item or not item.get("_pdf_attachment"):
+            continue
+        attachments.append(
+            {
+                "filename": txt(item.get("_pdf_filename") or "documento_gestaoclick.pdf"),
+                "content": item.get("_pdf_attachment"),
+                "mime_type": "application/pdf",
+            }
+        )
+    return attachments
+
+
 def send_direct_reply(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
@@ -176,8 +218,9 @@ def send_direct_reply(
     subject: str,
     body: str,
     log_source: str,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
-    send_email_smtp(to_email, subject, body, txt(row["message_id"]))
+    send_email_smtp(to_email, subject, body, txt(row["message_id"]), attachments=attachments)
     update_email_status(row["id"], "arquivado", conn)
     log_event("INFO", log_source, f"E-mail {row['id']} enviado para {to_email} e arquivado.", conn)
 
@@ -212,7 +255,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "status": txt(item.get("liquidado")),
                     "forma": txt(item.get("nome_forma_pagamento")),
                     "hash": find_nested_value(item, ("hash", "codigo_hash", "hash_publico", "token")),
-                    "link": best_finance_link(item, "GESTAOCLICK_BOLETO_LINK_TEMPLATE"),
+                    "link": best_finance_link(item, "GESTAOCLICK_BOLETO_LINK_TEMPLATE") or ("PDF encontrado" if item.get("_pdf_attachment") else ""),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -226,7 +269,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "emissao": txt(item.get("data_emissao")),
                     "situacao": txt(item.get("situacao_nf")),
                     "hash": find_nested_value(item, ("hash", "codigo_hash", "hash_publico", "token")),
-                    "link": best_finance_link(item, "GESTAOCLICK_NOTA_LINK_TEMPLATE"),
+                    "link": best_finance_link(item, "GESTAOCLICK_NOTA_LINK_TEMPLATE") or ("PDF encontrado" if item.get("_pdf_attachment") else ""),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -556,19 +599,33 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 value=best_finance_link(invoice, "GESTAOCLICK_NOTA_LINK_TEMPLATE") if invoice else "",
                 key=f"fin_invoice_link_{row['id']}_{invoice_index}",
             )
+            invoice_hash = st.text_input(
+                "Código/hash da nota, se o link não aparecer",
+                value=find_nested_value(invoice, ("hash", "codigo_hash", "hash_publico", "token")) if invoice else "",
+                key=f"fin_invoice_hash_{row['id']}_{invoice_index}",
+            )
             receipt_link = st.text_input(
                 "Link do boleto/recebimento",
                 value=best_finance_link(receivable, "GESTAOCLICK_BOLETO_LINK_TEMPLATE") if receivable else "",
                 key=f"fin_receipt_link_{row['id']}_{receipt_index}",
             )
+            receipt_hash = st.text_input(
+                "Código/hash do boleto, se o link não aparecer",
+                value=find_nested_value(receivable, ("hash", "codigo_hash", "hash_publico", "token")) if receivable else "",
+                key=f"fin_receipt_hash_{row['id']}_{receipt_index}",
+            )
+            if invoice and invoice_hash and not invoice_link:
+                invoice_link = DEFAULT_NOTA_LINK_TEMPLATE.format(hash=invoice_hash)
+            if receivable and receipt_hash and not receipt_link:
+                receipt_link = DEFAULT_BOLETO_LINK_TEMPLATE.format(hash=receipt_hash)
             if invoice and invoice_link:
                 invoice = {**invoice, "link_manual": invoice_link}
             if receivable and receipt_link:
                 receivable = {**receivable, "link_manual": receipt_link}
             if invoice and not invoice_link:
-                st.warning("A API não retornou link da nota. Configure GESTAOCLICK_NOTA_LINK_TEMPLATE nos Secrets para montar automaticamente.")
+                st.warning(finance_link_missing_reason(invoice, "GESTAOCLICK_NOTA_LINK_TEMPLATE") or "A API não retornou link da nota.")
             if receivable and not receipt_link:
-                st.warning("A API não retornou link do boleto. Configure GESTAOCLICK_BOLETO_LINK_TEMPLATE nos Secrets para montar automaticamente.")
+                st.warning(finance_link_missing_reason(receivable, "GESTAOCLICK_BOLETO_LINK_TEMPLATE") or "A API não retornou link do boleto.")
             auto_body = build_finance_email_body(txt(row["sender_name"]) or txt(row["sender_email"]), receivable, invoice)
             st.text_area(
                 "Prévia do e-mail financeiro",
@@ -592,7 +649,15 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 key=f"fin_auto_send_{row['id']}",
             ):
                 try:
-                    send_direct_reply(conn, row, auto_to_email, f"Re: {txt(row['subject'])}", auto_body, "envio_financeiro_direto")
+                    send_direct_reply(
+                        conn,
+                        row,
+                        auto_to_email,
+                        f"Re: {txt(row['subject'])}",
+                        auto_body,
+                        "envio_financeiro_direto",
+                        attachments=finance_pdf_attachments(invoice, receivable),
+                    )
                     st.success("E-mail enviado e arquivado.")
                     st.rerun()
                 except Exception as exc:

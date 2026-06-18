@@ -4,7 +4,6 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
 from typing import Any
 
 from utils import env
@@ -68,6 +67,35 @@ class GestaoClickClient:
             raise GestaoClickError(json.dumps(result, ensure_ascii=False)[:1200])
         return result
 
+    def request_resource(self, path: str) -> dict[str, Any]:
+        url = f"{self.base_url}/{path.strip('/')}"
+        req = urllib.request.Request(url, headers=self._headers(), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=40) as resp:
+                content = resp.read()
+                content_type = resp.headers.get("Content-Type", "")
+                final_url = resp.geturl()
+        except urllib.error.HTTPError:
+            return {}
+        except Exception:
+            return {}
+
+        if final_url and final_url != url and "api.gestaoclick.com" not in final_url:
+            return {"link": final_url}
+        if "application/pdf" in content_type.lower() or content.startswith(b"%PDF"):
+            return {"pdf_bytes": content}
+        if "json" in content_type.lower():
+            try:
+                data = json.loads(content.decode("utf-8", errors="replace"))
+            except Exception:
+                data = {}
+            link = find_public_link(data)
+            if link:
+                return {"link": link}
+        text = content[:500].decode("utf-8", errors="replace")
+        link = find_public_link({"text": text})
+        return {"link": link} if link else {}
+
     def list_all_pages(self, path: str, params: dict[str, Any], max_pages: int = 10) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         seen_pages: set[int] = set()
@@ -121,6 +149,20 @@ class GestaoClickClient:
         result = self.request("GET", f"/recebimentos/{receivable_id}")
         return result.get("data") or {}
 
+    def resolve_receivable_resource(self, receivable_id: str | int) -> dict[str, Any]:
+        paths = [
+            f"/recebimentos/{receivable_id}/boleto",
+            f"/recebimentos/boleto/{receivable_id}",
+            f"/recebimentos/{receivable_id}/pdf",
+            f"/recebimentos/pdf/{receivable_id}",
+            f"/recebimentos/imprimir/{receivable_id}",
+        ]
+        for path in paths:
+            resource = self.request_resource(path)
+            if resource:
+                return resource
+        return {}
+
     def list_receivables(self, cliente_id: str | int, limit: int = 100) -> list[dict[str, Any]]:
         params = self._store_params({"cliente_id": cliente_id, "limit": limit})
         items = self.list_all_pages("/recebimentos", params)
@@ -134,6 +176,12 @@ class GestaoClickClient:
                     item = {**item, **self.get_receivable(item_id)}
                 except Exception:
                     pass
+                resource = self.resolve_receivable_resource(item_id)
+                if resource.get("link"):
+                    item["link_boleto_api"] = resource["link"]
+                if resource.get("pdf_bytes"):
+                    item["_pdf_attachment"] = resource["pdf_bytes"]
+                    item["_pdf_filename"] = f"boleto_{item.get('codigo') or item_id}.pdf"
             enriched.append(item)
         return enriched
 
@@ -155,6 +203,20 @@ class GestaoClickClient:
     def get_product_invoice(self, invoice_id: str | int) -> dict[str, Any]:
         result = self.request("GET", f"/notas_fiscais_produtos/{invoice_id}")
         return result.get("data") or {}
+
+    def resolve_product_invoice_resource(self, invoice_id: str | int) -> dict[str, Any]:
+        paths = [
+            f"/notas_fiscais_produtos/{invoice_id}/danfe",
+            f"/notas_fiscais_produtos/danfe/{invoice_id}",
+            f"/notas_fiscais_produtos/{invoice_id}/pdf",
+            f"/notas_fiscais_produtos/pdf/{invoice_id}",
+            f"/notas_fiscais_produtos/imprimir/{invoice_id}",
+        ]
+        for path in paths:
+            resource = self.request_resource(path)
+            if resource:
+                return resource
+        return {}
 
     def list_product_invoices(
         self,
@@ -189,6 +251,12 @@ class GestaoClickClient:
                             item = {**item, **self.get_product_invoice(item_id)}
                         except Exception:
                             pass
+                        resource = self.resolve_product_invoice_resource(item_id)
+                        if resource.get("link"):
+                            item["link_danfe_api"] = resource["link"]
+                        if resource.get("pdf_bytes"):
+                            item["_pdf_attachment"] = resource["pdf_bytes"]
+                            item["_pdf_filename"] = f"nota_{item.get('numero_nf') or item_id}.pdf"
                     if isinstance(item, dict):
                         dedupe_id = str(item.get("id") or item.get("numero_nf") or item.get("numero_nfe") or "")
                         if dedupe_id and dedupe_id in seen:
@@ -222,6 +290,34 @@ class GestaoClickClient:
 
 def only_digits(value: str) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def find_public_link(value: Any) -> str:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_name = str(key).lower()
+            if any(term in key_name for term in ("link", "url", "pdf", "danfe", "boleto")):
+                item_text = str(item or "")
+                if item_text.startswith(("http://", "https://")):
+                    return item_text
+            nested = find_public_link(item)
+            if nested:
+                return nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = find_public_link(item)
+            if nested:
+                return nested
+    elif isinstance(value, str):
+        start = min([idx for idx in [value.find("https://"), value.find("http://")] if idx >= 0], default=-1)
+        if start >= 0:
+            end = len(value)
+            for sep in ['"', "'", " ", "\n", "\r", "<"]:
+                pos = value.find(sep, start)
+                if pos > start:
+                    end = min(end, pos)
+            return value[start:end]
+    return ""
 
 
 def filter_invoices_for_client(
