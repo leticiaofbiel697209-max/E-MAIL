@@ -58,6 +58,26 @@ def find_finance_link(item: Any) -> str:
     return ""
 
 
+def apply_link_template(template: str, item: dict[str, Any] | None) -> str:
+    if not template or not item:
+        return ""
+    values = {
+        "id": txt(item.get("id")),
+        "codigo": txt(item.get("codigo")),
+        "numero": txt(item.get("numero_nf") or item.get("numero_nfe") or item.get("numero") or item.get("codigo") or item.get("id")),
+        "chave": txt(item.get("chave") or item.get("chave_nfe") or item.get("chave_acesso")),
+        "cliente_id": txt(item.get("cliente_id") or item.get("destinatario_id")),
+    }
+    try:
+        return template.format(**values)
+    except Exception:
+        return ""
+
+
+def best_finance_link(item: dict[str, Any] | None, template_env: str) -> str:
+    return find_finance_link(item) or apply_link_template(env(template_env, ""), item)
+
+
 def finance_option_label(item: dict[str, Any], kind: str) -> str:
     if kind == "recebimento":
         code = txt(item.get("codigo") or item.get("id"))
@@ -84,7 +104,7 @@ def build_finance_email_body(
     if invoice:
         invoice_number = txt(invoice.get("numero_nf") or invoice.get("numero_nfe") or invoice.get("numero") or invoice.get("id"))
         invoice_value = txt(invoice.get("valor_total_nf") or invoice.get("valor_produtos") or invoice.get("valor"))
-        invoice_link = find_finance_link(invoice)
+        invoice_link = best_finance_link(invoice, "GESTAOCLICK_NOTA_LINK_TEMPLATE")
         lines.append(f"Nota fiscal: {invoice_number or 'sem número informado'}")
         if invoice_value:
             lines.append(f"Valor da nota: R$ {invoice_value}")
@@ -94,7 +114,7 @@ def build_finance_email_body(
         receivable_code = txt(receivable.get("codigo") or receivable.get("id"))
         receivable_value = txt(receivable.get("valor_total") or receivable.get("valor"))
         receivable_due = txt(receivable.get("data_vencimento"))
-        receivable_link = find_finance_link(receivable)
+        receivable_link = best_finance_link(receivable, "GESTAOCLICK_BOLETO_LINK_TEMPLATE")
         lines.append(f"Boleto/recebimento: {receivable_code or 'sem código informado'}")
         if receivable_value:
             lines.append(f"Valor: R$ {receivable_value}")
@@ -135,7 +155,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "vencimento": txt(item.get("data_vencimento")),
                     "status": txt(item.get("liquidado")),
                     "forma": txt(item.get("nome_forma_pagamento")),
-                    "link": find_finance_link(item),
+                    "link": best_finance_link(item, "GESTAOCLICK_BOLETO_LINK_TEMPLATE"),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -148,7 +168,7 @@ def safe_table_rows(data: list[dict[str, Any]], kind: str) -> list[dict[str, str
                     "valor": txt(item.get("valor_total_nf") or item.get("valor_produtos")),
                     "emissao": txt(item.get("data_emissao")),
                     "situacao": txt(item.get("situacao_nf")),
-                    "link": find_finance_link(item),
+                    "link": best_finance_link(item, "GESTAOCLICK_NOTA_LINK_TEMPLATE"),
                     "loja": txt(item.get("nome_loja") or item.get("loja_id")),
                 }
             )
@@ -459,20 +479,29 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
             invoice = invoices[invoice_index] if invoice_index >= 0 and invoice_index < len(invoices) else None
             invoice_link = st.text_input(
                 "Link da nota fiscal",
-                value=find_finance_link(invoice) if invoice else "",
+                value=best_finance_link(invoice, "GESTAOCLICK_NOTA_LINK_TEMPLATE") if invoice else "",
                 key=f"fin_invoice_link_{row['id']}_{invoice_index}",
             )
             receipt_link = st.text_input(
                 "Link do boleto/recebimento",
-                value=find_finance_link(receivable) if receivable else "",
+                value=best_finance_link(receivable, "GESTAOCLICK_BOLETO_LINK_TEMPLATE") if receivable else "",
                 key=f"fin_receipt_link_{row['id']}_{receipt_index}",
             )
             if invoice and invoice_link:
                 invoice = {**invoice, "link_manual": invoice_link}
             if receivable and receipt_link:
                 receivable = {**receivable, "link_manual": receipt_link}
+            if invoice and not invoice_link:
+                st.warning("A API não retornou link da nota. Configure GESTAOCLICK_NOTA_LINK_TEMPLATE nos Secrets para montar automaticamente.")
+            if receivable and not receipt_link:
+                st.warning("A API não retornou link do boleto. Configure GESTAOCLICK_BOLETO_LINK_TEMPLATE nos Secrets para montar automaticamente.")
             auto_body = build_finance_email_body(txt(row["sender_name"]) or txt(row["sender_email"]), receivable, invoice)
-            st.text_area("Prévia do e-mail financeiro", auto_body, height=220, key=f"fin_auto_preview_{row['id']}")
+            st.text_area(
+                "Prévia do e-mail financeiro",
+                auto_body,
+                height=220,
+                key=f"fin_auto_preview_{row['id']}_{receipt_index}_{invoice_index}_{hash(invoice_link + receipt_link)}",
+            )
             approve_auto = st.checkbox("Aprovo criar rascunho com estes itens", key=f"fin_auto_approve_{row['id']}")
             if st.button(
                 "Criar e-mail com nota/boleto",
@@ -621,6 +650,8 @@ def config_tab() -> None:
         {"Variável": "GESTAOCLICK_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_ACCESS_TOKEN") else "não configurado"},
         {"Variável": "GESTAOCLICK_SECRET_ACCESS_TOKEN", "Status/valor": "configurado" if env("GESTAOCLICK_SECRET_ACCESS_TOKEN") else "não configurado"},
         {"Variável": "GESTAOCLICK_DEFAULT_LOJA_ID", "Status/valor": env("GESTAOCLICK_DEFAULT_LOJA_ID", "não configurado")},
+        {"Variável": "GESTAOCLICK_NOTA_LINK_TEMPLATE", "Status/valor": "configurado" if env("GESTAOCLICK_NOTA_LINK_TEMPLATE") else "não configurado"},
+        {"Variável": "GESTAOCLICK_BOLETO_LINK_TEMPLATE", "Status/valor": "configurado" if env("GESTAOCLICK_BOLETO_LINK_TEMPLATE") else "não configurado"},
     ]
     st.dataframe(config, use_container_width=True, hide_index=True)
     st.divider()
