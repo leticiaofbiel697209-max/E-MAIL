@@ -89,6 +89,7 @@ GEMINI_API_KEY = ""
 GEMINI_MODEL = "gemini-1.5-flash"
 GESTAOCLICK_NOTA_LINK_TEMPLATE = "https://gestaoclick.com/nfe/danfe/{hash}"
 GESTAOCLICK_BOLETO_LINK_TEMPLATE = "https://gestaoclick.com/boleto/{hash}"
+GESTAOCLICK_AUTO_FETCH_DOCUMENTS = "false"
 ```
 
 Depois clique em **Save** e reinicie o app. O código aceita tanto `.env` local quanto os Secrets do Streamlit Cloud.
@@ -100,6 +101,7 @@ Se a API do Gestão Click não retornar link público da nota ou boleto, configu
 Não use link fixo, por exemplo `https://gestaoclick.com/boleto/azaojQQ`, porque ele será sempre o mesmo para todos os clientes. Para o Gestão Click, normalmente o correto é usar `{hash}`: `https://gestaoclick.com/boleto/{hash}` e `https://gestaoclick.com/nfe/danfe/{hash}`.
 
 Se o retorno da API não trouxer `hash`, o app deixa o link em branco em vez de gerar URL quebrada.
+Por padrão, a busca de PDF/link fica manual para não travar a listagem. Use o botão **Buscar PDF/link dos itens selecionados** depois de escolher nota/boleto.
 
 Para SMTP na porta `587`, use `EMAIL_SMTP_USE_SSL = "false"` porque o app usa STARTTLS. Para porta `465`, use `EMAIL_SMTP_USE_SSL = "true"`.
 

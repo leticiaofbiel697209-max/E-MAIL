@@ -622,6 +622,18 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                 invoice = {**invoice, "link_manual": invoice_link}
             if receivable and receipt_link:
                 receivable = {**receivable, "link_manual": receipt_link}
+            if st.button("Buscar PDF/link dos itens selecionados", key=f"fin_fetch_docs_{row['id']}_{receipt_index}_{invoice_index}"):
+                try:
+                    if invoice:
+                        invoices[invoice_index] = gc.attach_product_invoice_resource(invoice)
+                    if receivable:
+                        receivables[receipt_index] = gc.attach_receivable_resource(receivable)
+                    st.session_state[f"fin_invoices_data_{row['id']}"] = invoices
+                    st.session_state[f"fin_receivables_data_{row['id']}"] = receivables
+                    st.success("Busca de PDF/link concluída para os itens selecionados.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Erro ao buscar PDF/link: {exc}")
             if invoice and not invoice_link:
                 st.warning(finance_link_missing_reason(invoice, "GESTAOCLICK_NOTA_LINK_TEMPLATE") or "A API não retornou link da nota.")
             if receivable and not receipt_link:

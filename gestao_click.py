@@ -20,6 +20,7 @@ class GestaoClickClient:
         self.access_token = env("GESTAOCLICK_ACCESS_TOKEN")
         self.secret_access_token = env("GESTAOCLICK_SECRET_ACCESS_TOKEN")
         self.default_loja_id = env("GESTAOCLICK_DEFAULT_LOJA_ID")
+        self.auto_fetch_documents = (env("GESTAOCLICK_AUTO_FETCH_DOCUMENTS", "false") or "").lower() in ("1", "true", "sim", "yes")
 
     def is_configured(self) -> bool:
         return bool(self.base_url and self.access_token and self.secret_access_token)
@@ -51,7 +52,7 @@ class GestaoClickClient:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(url, data=data, headers=self._headers(), method=method.upper())
         try:
-            with urllib.request.urlopen(req, timeout=40) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -177,14 +178,22 @@ class GestaoClickClient:
                     item = {**item, **self.get_receivable(item_id)}
                 except Exception:
                     pass
-                resource = self.resolve_receivable_resource(item_id)
-                if resource.get("link"):
-                    item["link_boleto_api"] = resource["link"]
-                if resource.get("pdf_bytes"):
-                    item["_pdf_attachment"] = resource["pdf_bytes"]
-                    item["_pdf_filename"] = f"boleto_{item.get('codigo') or item_id}.pdf"
+                if self.auto_fetch_documents:
+                    item = self.attach_receivable_resource(item)
             enriched.append(item)
         return enriched
+
+    def attach_receivable_resource(self, item: dict[str, Any]) -> dict[str, Any]:
+        item_id = item.get("id")
+        if not item_id:
+            return item
+        resource = self.resolve_receivable_resource(item_id)
+        if resource.get("link"):
+            item["link_boleto_api"] = resource["link"]
+        if resource.get("pdf_bytes"):
+            item["_pdf_attachment"] = resource["pdf_bytes"]
+            item["_pdf_filename"] = f"boleto_{item.get('codigo') or item_id}.pdf"
+        return item
 
     def list_receivables_for_clients(self, cliente_ids: list[str | int], limit: int = 100) -> list[dict[str, Any]]:
         seen: set[str] = set()
@@ -229,6 +238,8 @@ class GestaoClickClient:
         attempts = [
             {"destinatario_id": cliente_id, "limit": limit},
             {"destinatario_id_cliente": cliente_id, "limit": limit},
+            {"id_destinatario": cliente_id, "limit": limit},
+            {"id_cliente": cliente_id, "limit": limit},
             {"cliente_id": cliente_id, "limit": limit},
         ]
         if cnpj:
@@ -252,12 +263,8 @@ class GestaoClickClient:
                             item = {**item, **self.get_product_invoice(item_id)}
                         except Exception:
                             pass
-                        resource = self.resolve_product_invoice_resource(item_id)
-                        if resource.get("link"):
-                            item["link_danfe_api"] = resource["link"]
-                        if resource.get("pdf_bytes"):
-                            item["_pdf_attachment"] = resource["pdf_bytes"]
-                            item["_pdf_filename"] = f"nota_{item.get('numero_nf') or item_id}.pdf"
+                        if self.auto_fetch_documents:
+                            item = self.attach_product_invoice_resource(item)
                     if isinstance(item, dict):
                         dedupe_id = str(item.get("id") or item.get("numero_nf") or item.get("numero_nfe") or "")
                         if dedupe_id and dedupe_id in seen:
@@ -266,6 +273,18 @@ class GestaoClickClient:
                             seen.add(dedupe_id)
                         merged.append(item)
         return merged
+
+    def attach_product_invoice_resource(self, item: dict[str, Any]) -> dict[str, Any]:
+        item_id = item.get("id")
+        if not item_id:
+            return item
+        resource = self.resolve_product_invoice_resource(item_id)
+        if resource.get("link"):
+            item["link_danfe_api"] = resource["link"]
+        if resource.get("pdf_bytes"):
+            item["_pdf_attachment"] = resource["pdf_bytes"]
+            item["_pdf_filename"] = f"nota_{item.get('numero_nf') or item_id}.pdf"
+        return item
 
     def list_product_invoices_for_clients(
         self,
