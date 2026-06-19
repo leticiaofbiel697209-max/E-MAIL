@@ -546,7 +546,11 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         if c2.button("Consultar recebimentos", key=f"fin_receivables_{row['id']}"):
             try:
                 client_ids = selected_client_ids(cliente_id, st.session_state.get(clients_key) or [])
-                st.session_state[f"fin_receivables_data_{row['id']}"] = gc.list_receivables_for_clients(client_ids)
+                receivables = gc.list_receivables_for_clients(client_ids)
+                invoices = st.session_state.get(f"fin_invoices_data_{row['id']}") or []
+                receivables, invoices = gc.enrich_finance_documents(client_ids, receivables, invoices)
+                st.session_state[f"fin_receivables_data_{row['id']}"] = receivables
+                st.session_state[f"fin_invoices_data_{row['id']}"] = invoices
             except Exception as exc:
                 st.error(f"Erro ao consultar financeiro: {exc}")
         if c3.button("Consultar notas fiscais", key=f"fin_invoices_{row['id']}"):
@@ -557,6 +561,9 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                     cnpj=manual_cnpj,
                     numero_nf="" if show_all_docs else numero_nf,
                 )
+                receivables = st.session_state.get(f"fin_receivables_data_{row['id']}") or []
+                receivables, notas = gc.enrich_finance_documents(client_ids, receivables, notas)
+                st.session_state[f"fin_receivables_data_{row['id']}"] = receivables
                 st.session_state[f"fin_invoices_data_{row['id']}"] = notas
                 if not notas:
                     st.warning("Nenhuma nota correspondente a este Cliente ID/CNPJ foi encontrada.")
@@ -629,6 +636,8 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
                         invoices[invoice_index] = gc.attach_product_invoice_resource(invoice)
                     if receivable:
                         receivables[receipt_index] = gc.attach_receivable_resource(receivable)
+                    client_ids = selected_client_ids(cliente_id, st.session_state.get(clients_key) or [])
+                    receivables, invoices = gc.enrich_finance_documents(client_ids, receivables, invoices)
                     st.session_state[f"fin_invoices_data_{row['id']}"] = invoices
                     st.session_state[f"fin_receivables_data_{row['id']}"] = receivables
                     st.success("Busca de PDF/link concluída para os itens selecionados.")

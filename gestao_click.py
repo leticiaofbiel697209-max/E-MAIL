@@ -5,6 +5,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from utils import env
@@ -73,7 +74,7 @@ class GestaoClickClient:
         url = f"{self.base_url}/{path.strip('/')}"
         req = urllib.request.Request(url, headers=self._headers(), method="GET")
         try:
-            with urllib.request.urlopen(req, timeout=40) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 content = resp.read()
                 content_type = resp.headers.get("Content-Type", "")
                 final_url = resp.geturl()
@@ -187,6 +188,42 @@ class GestaoClickClient:
             enriched.append(item)
         return enriched
 
+    def get_sale(self, sale_id: str | int) -> dict[str, Any]:
+        result = self.request("GET", f"/vendas/{sale_id}")
+        data = result.get("data") or {}
+        return data if isinstance(data, dict) else {}
+
+    def list_sales(self, cliente_id: str | int, limit: int = 50) -> list[dict[str, Any]]:
+        params = self._store_params({"cliente_id": cliente_id, "limit": limit, "tipo": "produto"})
+        items = self.list_all_pages("/vendas", params, max_pages=int(env("GESTAOCLICK_SALES_MAX_PAGES", "3") or 3))
+        enriched: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if item_id:
+                try:
+                    item = {**item, **self.get_sale(item_id)}
+                except Exception:
+                    pass
+            enriched.append(item)
+        return enriched
+
+    def list_sales_for_clients(self, cliente_ids: list[str | int], limit: int = 50) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for cliente_id in cliente_ids:
+            if not str(cliente_id or "").strip():
+                continue
+            for item in self.list_sales(cliente_id, limit=limit):
+                item_id = str(item.get("id") or item.get("codigo") or "")
+                if item_id and item_id in seen:
+                    continue
+                if item_id:
+                    seen.add(item_id)
+                merged.append(item)
+        return merged
+
     def attach_receivable_resource(self, item: dict[str, Any]) -> dict[str, Any]:
         item_id = item.get("id")
         if not item_id:
@@ -213,6 +250,20 @@ class GestaoClickClient:
                     seen.add(item_id)
                 merged.append(item)
         return merged
+
+    def enrich_finance_documents(
+        self,
+        cliente_ids: list[str | int],
+        receivables: list[dict[str, Any]],
+        invoices: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        sales = self.list_sales_for_clients(cliente_ids)
+        if not sales:
+            return receivables, invoices
+        return (
+            [attach_sale_link(item, sales, "boleto") for item in receivables],
+            [attach_sale_link(item, sales, "nota") for item in invoices],
+        )
 
     def get_product_invoice(self, invoice_id: str | int) -> dict[str, Any]:
         result = self.request("GET", f"/notas_fiscais_produtos/{invoice_id}")
@@ -314,6 +365,139 @@ class GestaoClickClient:
 
 def only_digits(value: str) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def money_value(value: Any) -> Decimal | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".") if "," in text else text
+    try:
+        return Decimal(text).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def compact_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "/" in text:
+        parts = text.split("/")
+        if len(parts) == 3:
+            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
+    return text[:10]
+
+
+def collect_nested_values(value: Any, keys: tuple[str, ...]) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in keys and item not in (None, ""):
+                found.append(str(item))
+            found.extend(collect_nested_values(item, keys))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(collect_nested_values(item, keys))
+    return found
+
+
+def sale_public_hash(sale: dict[str, Any]) -> str:
+    for key in ("hash", "codigo_hash", "hash_publico", "token"):
+        if sale.get(key):
+            return str(sale.get(key))
+    nested = collect_nested_values(sale, ("hash", "codigo_hash", "hash_publico", "token"))
+    return nested[0] if nested else ""
+
+
+def sale_payment_rows(sale: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in sale.get("pagamentos") or []:
+        if isinstance(item, dict):
+            payment = item.get("pagamento") if isinstance(item.get("pagamento"), dict) else item
+            if isinstance(payment, dict):
+                rows.append(payment)
+    return rows
+
+
+def document_ids(item: dict[str, Any]) -> set[str]:
+    keys = (
+        "id",
+        "codigo",
+        "pedido_id",
+        "venda_id",
+        "orcamento_id",
+        "numero_nf",
+        "numero_nfe",
+        "numero",
+    )
+    return {str(value).strip() for value in collect_nested_values(item, keys) if str(value).strip()}
+
+
+def sale_ids(sale: dict[str, Any]) -> set[str]:
+    ids = document_ids(sale)
+    ids.update(str(value).strip() for value in collect_nested_values(sale, ("pedido_id",)) if str(value).strip())
+    return ids
+
+
+def same_money(left: Any, right: Any) -> bool:
+    left_value = money_value(left)
+    right_value = money_value(right)
+    return left_value is not None and right_value is not None and left_value == right_value
+
+
+def best_sale_for_document(item: dict[str, Any], sales: list[dict[str, Any]], kind: str) -> dict[str, Any] | None:
+    ids = document_ids(item)
+    for sale in sales:
+        if ids.intersection(sale_ids(sale)):
+            return sale
+
+    item_value = item.get("valor_total_nf") or item.get("valor_produtos") or item.get("valor_total") or item.get("valor")
+    item_date = compact_date(item.get("data_emissao") or item.get("data_vencimento") or item.get("data"))
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for sale in sales:
+        score = 0
+        if same_money(item_value, sale.get("valor_total")):
+            score += 3
+        sale_date = compact_date(sale.get("data") or sale.get("data_primeira_parcela"))
+        if item_date and sale_date and item_date == sale_date:
+            score += 2
+        for payment in sale_payment_rows(sale):
+            if same_money(item_value, payment.get("valor")):
+                score += 3
+            if item_date and compact_date(payment.get("data_vencimento")) == item_date:
+                score += 2
+        if kind == "nota" and item.get("pedido_id") and str(item.get("pedido_id")) in sale_ids(sale):
+            score += 5
+        if score:
+            scored.append((score, sale))
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored[0][1]
+
+
+def attach_sale_link(item: dict[str, Any], sales: list[dict[str, Any]], kind: str) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return item
+    if find_public_link(item) or item.get("hash") or item.get("codigo_hash") or item.get("hash_publico"):
+        return item
+    sale = best_sale_for_document(item, sales, kind)
+    if not sale:
+        return item
+    public_hash = sale_public_hash(sale)
+    if not public_hash:
+        return item
+    enriched = dict(item)
+    enriched["hash"] = public_hash
+    enriched["hash_origem"] = "venda"
+    enriched["venda_id"] = sale.get("id") or enriched.get("venda_id")
+    enriched["venda_codigo"] = sale.get("codigo") or enriched.get("venda_codigo")
+    if kind == "nota":
+        enriched["link_danfe_api"] = f"https://gestaoclick.com/nfe/danfe/{public_hash}"
+    else:
+        enriched["link_boleto_api"] = f"https://gestaoclick.com/boleto/{public_hash}"
+    return enriched
 
 
 def find_public_link(value: Any) -> str:
