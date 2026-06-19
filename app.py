@@ -526,6 +526,7 @@ def finance_panel(conn: sqlite3.Connection, row: sqlite3.Row, detected: dict[str
         manual_cnpj = st.text_input("CNPJ do cliente", value=cnpj_detectado, key=f"fin_cnpj_{row['id']}")
         numero_nf = st.text_input("Número da nota fiscal, se souber", key=f"fin_numero_nf_{row['id']}")
         show_all_docs = st.checkbox("Mostrar todas as notas/boletos deste cliente/CNPJ", value=True, key=f"fin_show_all_docs_{row['id']}")
+        st.caption(f"Busca limitada a {env('GESTAOCLICK_MAX_PAGES', '4')} página(s) da API para evitar timeout.")
         c1, c2, c3 = st.columns(3)
         if c1.button("Buscar cliente", key=f"fin_find_client_{row['id']}"):
             try:

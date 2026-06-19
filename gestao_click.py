@@ -98,15 +98,19 @@ class GestaoClickClient:
         link = find_public_link({"text": text})
         return {"link": link} if link else {}
 
-    def list_all_pages(self, path: str, params: dict[str, Any], max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all_pages(self, path: str, params: dict[str, Any], max_pages: int | None = None) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         seen_pages: set[int] = set()
         page = int(params.get("pagina") or 1)
-        while page not in seen_pages and len(seen_pages) < max_pages:
+        page_limit = max_pages or int(env("GESTAOCLICK_MAX_PAGES", "4") or 4)
+        while page not in seen_pages and len(seen_pages) < page_limit:
             seen_pages.add(page)
             page_params = dict(params)
             page_params["pagina"] = page
-            result = self.request("GET", path, params=page_params)
+            try:
+                result = self.request("GET", path, params=page_params)
+            except GestaoClickError:
+                break
             data = result.get("data") or []
             if isinstance(data, list):
                 items.extend(item for item in data if isinstance(item, dict))
@@ -165,7 +169,7 @@ class GestaoClickClient:
                 return resource
         return {}
 
-    def list_receivables(self, cliente_id: str | int, limit: int = 100) -> list[dict[str, Any]]:
+    def list_receivables(self, cliente_id: str | int, limit: int = 50) -> list[dict[str, Any]]:
         params = self._store_params({"cliente_id": cliente_id, "limit": limit})
         items = self.list_all_pages("/recebimentos", params)
         enriched = []
@@ -195,7 +199,7 @@ class GestaoClickClient:
             item["_pdf_filename"] = f"boleto_{item.get('codigo') or item_id}.pdf"
         return item
 
-    def list_receivables_for_clients(self, cliente_ids: list[str | int], limit: int = 100) -> list[dict[str, Any]]:
+    def list_receivables_for_clients(self, cliente_ids: list[str | int], limit: int = 50) -> list[dict[str, Any]]:
         seen: set[str] = set()
         merged: list[dict[str, Any]] = []
         for cliente_id in cliente_ids:
@@ -233,7 +237,7 @@ class GestaoClickClient:
         cliente_id: str | int,
         cnpj: str = "",
         numero_nf: str = "",
-        limit: int = 100,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
         attempts = [
             {"destinatario_id": cliente_id, "limit": limit},
@@ -291,7 +295,7 @@ class GestaoClickClient:
         cliente_ids: list[str | int],
         cnpj: str = "",
         numero_nf: str = "",
-        limit: int = 100,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
         seen: set[str] = set()
         merged: list[dict[str, Any]] = []
