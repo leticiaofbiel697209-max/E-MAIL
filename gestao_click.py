@@ -71,7 +71,10 @@ class GestaoClickClient:
         return result
 
     def request_resource(self, path: str) -> dict[str, Any]:
-        url = f"{self.base_url}/{path.strip('/')}"
+        if str(path).startswith(("http://", "https://")):
+            url = str(path)
+        else:
+            url = f"{self.base_url}/{path.strip('/')}"
         req = urllib.request.Request(url, headers=self._headers(), method="GET")
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -156,13 +159,36 @@ class GestaoClickClient:
         result = self.request("GET", f"/recebimentos/{receivable_id}")
         return result.get("data") or {}
 
-    def resolve_receivable_resource(self, receivable_id: str | int) -> dict[str, Any]:
+    def resolve_receivable_resource(self, receivable_item: dict[str, Any] | str | int) -> dict[str, Any]:
+        item = receivable_item if isinstance(receivable_item, dict) else {"id": receivable_item}
+        tokens = unique_values(
+            [
+                item.get("id"),
+                item.get("codigo"),
+                item.get("pedido_id"),
+                item.get("venda_id"),
+                item.get("boleto_id"),
+                item.get("nosso_numero"),
+                item.get("documento"),
+            ]
+        )
         paths = [
-            f"/recebimentos/{receivable_id}/boleto",
-            f"/recebimentos/boleto/{receivable_id}",
-            f"/recebimentos/{receivable_id}/pdf",
-            f"/recebimentos/pdf/{receivable_id}",
-            f"/recebimentos/imprimir/{receivable_id}",
+            f"/recebimentos/{token}/boleto"
+            for token in tokens
+        ] + [
+            f"/recebimentos/boleto/{token}" for token in tokens
+        ] + [
+            f"/recebimentos/{token}/pdf" for token in tokens
+        ] + [
+            f"/recebimentos/pdf/{token}" for token in tokens
+        ] + [
+            f"/recebimentos/imprimir/{token}" for token in tokens
+        ] + [
+            f"/boletos/{token}" for token in tokens
+        ] + [
+            f"/boletos/{token}/pdf" for token in tokens
+        ] + [
+            f"https://gestaoclick.com/boleto/{token}" for token in tokens
         ]
         for path in paths:
             resource = self.request_resource(path)
@@ -228,7 +254,7 @@ class GestaoClickClient:
         item_id = item.get("id")
         if not item_id:
             return item
-        resource = self.resolve_receivable_resource(item_id)
+        resource = self.resolve_receivable_resource(item)
         if resource.get("link"):
             item["link_boleto_api"] = resource["link"]
         if resource.get("pdf_bytes"):
@@ -269,13 +295,37 @@ class GestaoClickClient:
         result = self.request("GET", f"/notas_fiscais_produtos/{invoice_id}")
         return result.get("data") or {}
 
-    def resolve_product_invoice_resource(self, invoice_id: str | int) -> dict[str, Any]:
+    def resolve_product_invoice_resource(self, invoice_item: dict[str, Any] | str | int) -> dict[str, Any]:
+        item = invoice_item if isinstance(invoice_item, dict) else {"id": invoice_item}
+        tokens = unique_values(
+            [
+                item.get("id"),
+                item.get("numero_nf"),
+                item.get("numero_nfe"),
+                item.get("numero"),
+                item.get("pedido_id"),
+                item.get("chave"),
+                item.get("chave_nfe"),
+                item.get("chave_acesso"),
+            ]
+        )
         paths = [
-            f"/notas_fiscais_produtos/{invoice_id}/danfe",
-            f"/notas_fiscais_produtos/danfe/{invoice_id}",
-            f"/notas_fiscais_produtos/{invoice_id}/pdf",
-            f"/notas_fiscais_produtos/pdf/{invoice_id}",
-            f"/notas_fiscais_produtos/imprimir/{invoice_id}",
+            f"/notas_fiscais_produtos/{token}/danfe"
+            for token in tokens
+        ] + [
+            f"/notas_fiscais_produtos/danfe/{token}" for token in tokens
+        ] + [
+            f"/notas_fiscais_produtos/{token}/pdf" for token in tokens
+        ] + [
+            f"/notas_fiscais_produtos/pdf/{token}" for token in tokens
+        ] + [
+            f"/notas_fiscais_produtos/imprimir/{token}" for token in tokens
+        ] + [
+            f"/notas_fiscais_produtos/{token}/imprimir" for token in tokens
+        ] + [
+            f"/notas_fiscais_produtos/{token}/xml" for token in tokens
+        ] + [
+            f"https://gestaoclick.com/nfe/danfe/{token}" for token in tokens
         ]
         for path in paths:
             resource = self.request_resource(path)
@@ -333,7 +383,7 @@ class GestaoClickClient:
         item_id = item.get("id")
         if not item_id:
             return item
-        resource = self.resolve_product_invoice_resource(item_id)
+        resource = self.resolve_product_invoice_resource(item)
         if resource.get("link"):
             item["link_danfe_api"] = resource["link"]
         if resource.get("pdf_bytes"):
@@ -365,6 +415,18 @@ class GestaoClickClient:
 
 def only_digits(value: str) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def unique_values(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def money_value(value: Any) -> Decimal | None:
@@ -489,14 +551,12 @@ def attach_sale_link(item: dict[str, Any], sales: list[dict[str, Any]], kind: st
     if not public_hash:
         return item
     enriched = dict(item)
-    enriched["hash"] = public_hash
-    enriched["hash_origem"] = "venda"
+    # O hash da venda ajuda a diagnosticar o vínculo, mas não é o hash público
+    # do DANFE/boleto. Usá-lo como link fiscal gera URLs incorretas.
+    enriched["venda_hash"] = public_hash
+    enriched["hash_origem"] = "venda_relacionada"
     enriched["venda_id"] = sale.get("id") or enriched.get("venda_id")
     enriched["venda_codigo"] = sale.get("codigo") or enriched.get("venda_codigo")
-    if kind == "nota":
-        enriched["link_danfe_api"] = f"https://gestaoclick.com/nfe/danfe/{public_hash}"
-    else:
-        enriched["link_boleto_api"] = f"https://gestaoclick.com/boleto/{public_hash}"
     return enriched
 
 
